@@ -127,6 +127,99 @@ python spoolup.py
 python spoolup.py -c /path/to/config.json
 ```
 
+## 🖨️ Creality K1 Installation
+
+For **Creality K1, K1 Max, and K1C** printers with rooted firmware, use the automated installer:
+
+### Quick Install
+
+```bash
+# 1. Download and run the installer on your K1
+ssh root@<your_printer_ip>
+curl -fsSL https://raw.githubusercontent.com/AliHadiOzturk/spoolup/main/install_k1.sh | bash
+
+# Or manually:
+# scp install_k1.sh root@<your_printer_ip>:/tmp/
+# ssh root@<your_printer_ip>
+# bash /tmp/install_k1.sh
+```
+
+### K1-Specific Configuration
+
+The installer automatically configures SpoolUp for K1 paths:
+- **Installation directory**: `/usr/data/printer_data/config/spoolup/`
+- **Timelapse directory**: `/usr/data/printer_data/timelapse/`
+- **Service**: Runs as systemd service under root
+- **Logs**: `/var/log/spoolup.log`
+
+### YouTube Authentication on K1 (Headless)
+
+The K1 doesn't have a browser, so you have **two options**:
+
+#### Option 1: Authenticate on Your PC (Recommended)
+
+1. **On your PC/Mac**, download SpoolUp:
+   ```bash
+   git clone https://github.com/AliHadiOzturk/spoolup.git
+   cd spoolup
+   pip install -r requirements.txt
+   ```
+
+2. **Copy your `client_secrets.json`** to the PC
+
+3. **Authenticate on the PC** (opens browser):
+   ```bash
+   python3 spoolup.py --auth-only
+   ```
+
+4. **Copy the generated token to your K1**:
+   ```bash
+   scp youtube_token.json root@<printer_ip>:/usr/data/printer_data/config/spoolup/
+   ```
+
+#### Option 2: Headless Authentication on K1
+
+1. **Copy your `client_secrets.json`** to K1:
+   ```bash
+   scp client_secrets.json root@<printer_ip>:/usr/data/printer_data/config/spoolup/
+   ```
+
+2. **Run headless authentication** on K1:
+   ```bash
+   ssh root@<printer_ip>
+   cd /usr/data/printer_data/config/spoolup
+   python3 spoolup.py --auth-only --headless
+   ```
+
+3. **The script will display a URL**. Copy this URL to your PC's browser
+
+4. **Authorize SpoolUp** and copy the authorization code
+
+5. **Paste the code** back into the SSH session
+
+### Managing the Service on K1
+
+```bash
+# Start SpoolUp
+systemctl start spoolup
+
+# Stop SpoolUp
+systemctl stop spoolup
+
+# Restart SpoolUp
+systemctl restart spoolup
+
+# Check status
+systemctl status spoolup
+/usr/data/printer_data/config/spoolup/status.sh
+
+# Enable auto-start on boot
+systemctl enable spoolup
+
+# View logs
+tail -f /var/log/spoolup.log
+```
+
 ## 🔧 Configuration Options
 
 | Option | Description | Default |
@@ -187,7 +280,26 @@ Options:
   -c, --config PATH       Path to configuration file (default: config.json)
   --create-config         Create a sample configuration file
   --auth-only             Only authenticate with YouTube and exit
+  --headless              Use headless authentication (for machines without browser)
   -h, --help              Show help message
+```
+
+**Authentication Options:**
+
+- **`--auth-only`**: Run authentication flow and exit (useful for setup)
+- **`--headless`**: Use console-based authentication instead of browser (for headless machines like K1)
+
+Common authentication scenarios:
+
+```bash
+# Desktop with browser (opens browser automatically)
+python spoolup.py --auth-only
+
+# Headless machine (shows URL to open on another device)
+python spoolup.py --auth-only --headless
+
+# Run the service
+python spoolup.py
 ```
 
 ## 🐛 Troubleshooting
@@ -227,6 +339,22 @@ If authentication fails:
 1. Delete the `youtube_token.json` file
 2. Re-run authentication: `python spoolup.py --auth-only`
 3. Ensure your `client_secrets.json` is valid and placed in the correct directory
+
+**For headless machines (K1, servers without browser):**
+
+If you see an error about "cannot open browser" or "webbrowser" module:
+
+1. **Use headless mode** (requires copy-pasting the authorization code):
+   ```bash
+   python spoolup.py --auth-only --headless
+   ```
+
+2. **Or authenticate on a different machine** (recommended for K1):
+   - Run authentication on your PC/Mac: `python spoolup.py --auth-only`
+   - Copy the generated `youtube_token.json` to your K1:
+     ```bash
+     scp youtube_token.json root@<k1_ip>:/usr/data/printer_data/config/spoolup/
+     ```
 
 ### Stream Not Starting
 
@@ -282,8 +410,9 @@ spoolup/
 ├── spoolup.py              # Main application
 ├── test_setup.py           # Setup verification script
 ├── requirements.txt        # Python dependencies
-├── install.sh              # Installation script
-├── spoolup.service         # Systemd service file
+├── install_k1.sh           # K1-specific installation script
+├── install_generic.sh      # Generic Linux installation script
+├── spoolup.service         # Systemd service file (K1-optimized)
 ├── config.json             # Your configuration (not in repo)
 ├── config.json.sample      # Sample configuration
 ├── client_secrets.json     # YouTube API credentials (you provide)

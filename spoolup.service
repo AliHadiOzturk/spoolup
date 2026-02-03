@@ -1,18 +1,15 @@
 [Unit]
-Description=SpoolUp
-Documentation=https://github.com/yourusername/spoolup
+Description=SpoolUp - YouTube Streamer for 3D Prints
 After=network-online.target moonraker.service
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/home/user/printer_data/config/spoolup
-ExecStart=/usr/bin/python3 /home/user/printer_data/config/spoolup/spoolup.py -c /home/user/printer_data/config/spoolup/config.json
+WorkingDirectory=/usr/data/printer_data/config/spoolup
+ExecStart=/usr/bin/python3 /usr/data/printer_data/config/spoolup/spoolup.py -c /usr/data/printer_data/config/spoolup/config.json
 Restart=always
 RestartSec=10
-
-# Logging
 StandardOutput=append:/var/log/spoolup.log
 StandardError=append:/var/log/spoolup.log
 

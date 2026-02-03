@@ -568,8 +568,9 @@ class YouTubeUploader:
 class SpoolUp:
     """Main application class"""
 
-    def __init__(self, config_file: str = "config.json"):
+    def __init__(self, config_file: str = "config.json", headless: bool = False):
         self.config = Config(config_file)
+        self.headless = headless
         self.moonraker = None
         self.youtube = None
         self.streamer = None
@@ -577,8 +578,12 @@ class SpoolUp:
         self.print_start_time = None
         self.timelapse_file = None
 
-    def authenticate_youtube(self) -> bool:
-        """Authenticate with YouTube API"""
+    def authenticate_youtube(self, headless: bool = False) -> bool:
+        """Authenticate with YouTube API
+
+        Args:
+            headless: If True, use console-based authentication (for headless machines like K1)
+        """
         creds = None
         token_file: str = self.config.get("token_file") or "youtube_token.json"
         client_secrets: str = (
@@ -615,7 +620,13 @@ class SpoolUp:
                     flow = InstalledAppFlow.from_client_secrets_file(
                         client_secrets, SCOPES
                     )
-                    creds = flow.run_local_server(port=0)
+
+                    if headless:
+                        # Headless mode - console based auth (for K1 and headless machines)
+                        creds = flow.run_console()
+                    else:
+                        # Desktop mode - local server (opens browser automatically)
+                        creds = flow.run_local_server(port=0)
                     logger.info("Authenticated with YouTube")
                 except Exception as e:
                     logger.error(f"Authentication failed: {e}")
@@ -779,7 +790,7 @@ This timelapse was automatically generated using Moonraker Timelapse plugin and 
         logger.info("=" * 60)
 
         # Authenticate with YouTube
-        if not self.authenticate_youtube():
+        if not self.authenticate_youtube(headless=self.headless):
             logger.error("YouTube authentication failed. Exiting.")
             return 1
 
@@ -882,6 +893,11 @@ def main():
         action="store_true",
         help="Only authenticate with YouTube and exit",
     )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Use headless authentication (for machines without browser, e.g., K1 Max)",
+    )
 
     args = parser.parse_args()
 
@@ -889,10 +905,10 @@ def main():
         create_sample_config()
         return 0
 
-    app = SpoolUp(args.config)
+    app = SpoolUp(args.config, headless=args.headless)
 
     if args.auth_only:
-        if app.authenticate_youtube():
+        if app.authenticate_youtube(headless=args.headless):
             logger.info("Authentication successful!")
             return 0
         else:
