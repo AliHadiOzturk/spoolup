@@ -1,0 +1,20 @@
+[Unit]
+Description=SpoolUp
+Documentation=https://github.com/yourusername/spoolup
+After=network-online.target moonraker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/user/printer_data/config/spoolup
+ExecStart=/usr/bin/python3 /home/user/printer_data/config/spoolup/spoolup.py -c /home/user/printer_data/config/spoolup/config.json
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=append:/var/log/spoolup.log
+StandardError=append:/var/log/spoolup.log
+
+[Install]
+WantedBy=multi-user.target
