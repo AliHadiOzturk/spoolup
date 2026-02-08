@@ -130,12 +130,13 @@ info "Downloading latest version from GitHub..."
 cd /tmp
 
 # Download the repository
-if command -v curl &> /dev/null; then
-    curl -L -o spoolup.tar.gz "https://github.com/AliHadiOzturk/spoolup/archive/refs/heads/main.tar.gz" 2>&1 | tee -a "$LOG_FILE"
-elif command -v wget &> /dev/null; then
+# Prefer wget on K1 since curl often lacks SSL support
+if command -v wget &> /dev/null; then
     wget -O spoolup.tar.gz "https://github.com/AliHadiOzturk/spoolup/archive/refs/heads/main.tar.gz" 2>&1 | tee -a "$LOG_FILE"
+elif command -v curl &> /dev/null; then
+    curl -L -o spoolup.tar.gz "https://github.com/AliHadiOzturk/spoolup/archive/refs/heads/main.tar.gz" 2>&1 | tee -a "$LOG_FILE"
 else
-    error "Neither curl nor wget found. Cannot download SpoolUp."
+    error "Neither wget nor curl found. Cannot download SpoolUp."
     exit 1
 fi
 
