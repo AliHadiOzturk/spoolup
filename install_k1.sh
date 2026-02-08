@@ -129,12 +129,40 @@ log "⬇️  Step 3: Downloading SpoolUp..."
 info "Downloading latest version from GitHub..."
 cd /tmp
 
-# Download the repository using wget with SSL check disabled
-# (K1's SSL/TLS stack has certificate validation issues)
-if command -v wget &> /dev/null; then
-    wget --no-check-certificate -O spoolup.tar.gz "https://github.com/AliHadiOzturk/spoolup/archive/refs/heads/main.tar.gz" 2>&1 | tee -a "$LOG_FILE"
-else
-    error "wget not found. Cannot download SpoolUp."
+# Download the repository
+# Try multiple wget approaches for K1's limited SSL/TLS support
+DOWNLOAD_SUCCESS=false
+
+# Method 1: Try using raw content URL (often works better on K1)
+if ! $DOWNLOAD_SUCCESS && wget -O spoolup.tar.gz "https://raw.githubusercontent.com/AliHadiOzturk/spoolup/main/spoolup.tar.gz" 2>&1 | tee -a "$LOG_FILE"; then
+    if [ -f spoolup.tar.gz ] && [ -s spoolup.tar.gz ]; then
+        DOWNLOAD_SUCCESS=true
+    fi
+fi
+
+# Method 2: Try GitHub archive URL with http:// instead of https://
+if ! $DOWNLOAD_SUCCESS; then
+    rm -f spoolup.tar.gz
+    if wget -O spoolup.tar.gz "http://github.com/AliHadiOzturk/spoolup/archive/refs/heads/main.tar.gz" 2>&1 | tee -a "$LOG_FILE"; then
+        if [ -f spoolup.tar.gz ] && [ -s spoolup.tar.gz ]; then
+            DOWNLOAD_SUCCESS=true
+        fi
+    fi
+fi
+
+# Method 3: Try with --no-check-certificate if supported
+if ! $DOWNLOAD_SUCCESS; then
+    rm -f spoolup.tar.gz
+    if wget --no-check-certificate -O spoolup.tar.gz "https://github.com/AliHadiOzturk/spoolup/archive/refs/heads/main.tar.gz" 2>&1 | tee -a "$LOG_FILE"; then
+        if [ -f spoolup.tar.gz ] && [ -s spoolup.tar.gz ]; then
+            DOWNLOAD_SUCCESS=true
+        fi
+    fi
+fi
+
+if ! $DOWNLOAD_SUCCESS; then
+    error "Failed to download SpoolUp. All download methods failed."
+    error "Please manually download the repository and copy it to your K1."
     exit 1
 fi
 
