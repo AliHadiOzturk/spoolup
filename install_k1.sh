@@ -129,31 +129,46 @@ log "⬇️  Step 3: Downloading SpoolUp..."
 info "Downloading latest version from GitHub..."
 cd /tmp
 
-# Download the repository from GitHub release
-# Use Entware's wget if available (has proper SSL support)
+# Try to download automatically, but K1 SSL/TLS often fails with GitHub
+# So we also support manual file placement
 RELEASE_URL="https://github.com/AliHadiOzturk/spoolup/releases/download/v1.0.2/spoolup-v1.0.2.tar.gz"
-info "Downloading from release: v1.0.2"
+LOCAL_TARBALL="$INSTALL_DIR/spoolup-v1.0.2.tar.gz"
 
-if command -v wget &> /dev/null; then
-    info "Using wget..."
-    if ! wget --no-check-certificate -O spoolup.tar.gz "$RELEASE_URL" 2>&1 | tee -a "$LOG_FILE"; then
-        error "Failed to download SpoolUp from release"
+if [ -f "$LOCAL_TARBALL" ]; then
+    info "Using locally provided tarball..."
+    cp "$LOCAL_TARBALL" /tmp/spoolup.tar.gz
+elif command -v wget &> /dev/null; then
+    info "Attempting to download from GitHub..."
+    if wget --no-check-certificate -O /tmp/spoolup.tar.gz "$RELEASE_URL" 2>&1 | tee -a "$LOG_FILE"; then
+        info "Download successful"
+    else
+        warning "Automatic download failed (K1 SSL/TLS limitation)"
+        log ""
+        log "📋 Manual Download Required:"
+        log "   1. On your PC, download:"
+        log "      $RELEASE_URL"
+        log ""
+        log "   2. Copy to your K1:"
+        log "      scp spoolup-v1.0.2.tar.gz root@<printer_ip>:$INSTALL_DIR/"
+        log ""
+        log "   3. Re-run this installer"
+        log ""
         exit 1
     fi
 else
-    error "wget not found. Please install Entware first: 'opkg install wget'"
+    error "wget not found. Please install Entware: 'opkg install wget'"
     exit 1
 fi
 
 # Verify download succeeded
-if [ ! -f spoolup.tar.gz ] || [ ! -s spoolup.tar.gz ]; then
+if [ ! -f /tmp/spoolup.tar.gz ] || [ ! -s /tmp/spoolup.tar.gz ]; then
     error "Downloaded file is empty or missing"
     exit 1
 fi
 
-# Extract directly to install directory (release tarball has files at root)
-tar -xzf spoolup.tar.gz -C "$INSTALL_DIR/"
-rm -f spoolup.tar.gz
+# Extract to install directory
+tar -xzf /tmp/spoolup.tar.gz -C "$INSTALL_DIR/"
+rm -f /tmp/spoolup.tar.gz "$LOCAL_TARBALL"
 success "Files installed to $INSTALL_DIR"
 
 # Step 4: Install Python dependencies
