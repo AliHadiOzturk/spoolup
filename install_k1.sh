@@ -134,22 +134,14 @@ cd /tmp
 RELEASE_URL="https://github.com/AliHadiOzturk/spoolup/releases/download/v1.0.2/spoolup-v1.0.2.tar.gz"
 info "Downloading from release: v1.0.2"
 
-# Check for Entware wget first (better SSL support)
-if [ -f /opt/bin/wget ]; then
-    info "Using Entware wget..."
-    if ! /opt/bin/wget --no-check-certificate -O spoolup.tar.gz "$RELEASE_URL" 2>&1 | tee -a "$LOG_FILE"; then
-        error "Failed to download SpoolUp from release"
-        exit 1
-    fi
-# Fall back to system wget
-elif command -v wget &> /dev/null; then
-    info "Using system wget..."
-    if ! wget -O spoolup.tar.gz "$RELEASE_URL" 2>&1 | tee -a "$LOG_FILE"; then
+if command -v wget &> /dev/null; then
+    info "Using wget..."
+    if ! wget --no-check-certificate -O spoolup.tar.gz "$RELEASE_URL" 2>&1 | tee -a "$LOG_FILE"; then
         error "Failed to download SpoolUp from release"
         exit 1
     fi
 else
-    error "wget not found. Please install Entware first or manually download SpoolUp."
+    error "wget not found. Please install Entware first: 'opkg install wget'"
     exit 1
 fi
 
