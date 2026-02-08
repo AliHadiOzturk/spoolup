@@ -185,11 +185,14 @@ else
     warning "Configuration already exists, skipping creation"
 fi
 
-# Step 6: Create systemd service
+# Step 6: Create service
 log ""
-log "🔧 Step 6: Creating systemd service..."
+log "🔧 Step 6: Creating service..."
 
-cat > /etc/systemd/system/${SERVICE_NAME}.service << 'EOF'
+# Check which init system is available
+if [ -d "/etc/systemd/system" ]; then
+    # Systemd available
+    cat > /etc/systemd/system/${SERVICE_NAME}.service << 'EOF'
 [Unit]
 Description=SpoolUp - YouTube Streamer for 3D Prints
 After=network-online.target moonraker.service
@@ -208,9 +211,63 @@ StandardError=append:/var/log/spoolup.log
 [Install]
 WantedBy=multi-user.target
 EOF
+    systemctl daemon-reload 2>/dev/null || true
+    INIT_TYPE="systemd"
+    success "Systemd service created: ${SERVICE_NAME}.service"
+elif [ -d "/etc/init.d" ]; then
+    # OpenWrt/Buildroot init.d
+    cat > /etc/init.d/S99${SERVICE_NAME} << 'EOF'
+#!/bin/sh
+# SpoolUp service script for K1
 
-systemctl daemon-reload
-success "Systemd service created: ${SERVICE_NAME}.service"
+start() {
+    echo "Starting SpoolUp..."
+    cd /usr/data/printer_data/config/spoolup
+    /usr/bin/python3 spoolup.py -c /usr/data/printer_data/config/spoolup/config.json > /var/log/spoolup.log 2>&1 &
+    echo $! > /var/run/spoolup.pid
+}
+
+stop() {
+    echo "Stopping SpoolUp..."
+    if [ -f /var/run/spoolup.pid ]; then
+        kill $(cat /var/run/spoolup.pid) 2>/dev/null
+        rm -f /var/run/spoolup.pid
+    fi
+}
+
+restart() {
+    stop
+    sleep 2
+    start
+}
+
+status() {
+    if [ -f /var/run/spoolup.pid ]; then
+        if kill -0 $(cat /var/run/spoolup.pid) 2>/dev/null; then
+            echo "SpoolUp is running"
+        else
+            echo "SpoolUp is not running (stale pid file)"
+        fi
+    else
+        echo "SpoolUp is not running"
+    fi
+}
+
+case "$1" in
+    start) start ;;
+    stop) stop ;;
+    restart) restart ;;
+    status) status ;;
+    *) echo "Usage: $0 {start|stop|restart|status}"; exit 1 ;;
+esac
+EOF
+    chmod +x /etc/init.d/S99${SERVICE_NAME}
+    INIT_TYPE="initd"
+    success "Init.d service created: S99${SERVICE_NAME}"
+else
+    warning "Unknown init system. Service will not be auto-started."
+    INIT_TYPE="none"
+fi
 
 # Step 7: Create log file
 log ""
