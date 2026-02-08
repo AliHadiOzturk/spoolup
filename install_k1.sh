@@ -130,8 +130,8 @@ info "Downloading latest version from GitHub..."
 cd /tmp
 
 # Download the repository from GitHub release
-RELEASE_URL="https://github.com/AliHadiOzturk/spoolup/releases/download/v1.0.0/spoolup-v1.0.0.tar.gz"
-info "Downloading from release: v1.0.0"
+RELEASE_URL="https://github.com/AliHadiOzturk/spoolup/releases/download/v1.0.1/spoolup-v1.0.1.tar.gz"
+info "Downloading from release: v1.0.1"
 
 if ! wget -O spoolup.tar.gz "$RELEASE_URL" 2>&1 | tee -a "$LOG_FILE"; then
     error "Failed to download SpoolUp from release"
