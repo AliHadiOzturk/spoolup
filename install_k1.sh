@@ -129,9 +129,10 @@ log "⬇️  Step 3: Downloading SpoolUp..."
 info "Downloading latest version from GitHub..."
 cd /tmp
 
-# Download the repository using wget (curl on K1 lacks SSL and basic flags)
+# Download the repository using wget with SSL check disabled
+# (K1's SSL/TLS stack has certificate validation issues)
 if command -v wget &> /dev/null; then
-    wget -O spoolup.tar.gz "https://github.com/AliHadiOzturk/spoolup/archive/refs/heads/main.tar.gz" 2>&1 | tee -a "$LOG_FILE"
+    wget --no-check-certificate -O spoolup.tar.gz "https://github.com/AliHadiOzturk/spoolup/archive/refs/heads/main.tar.gz" 2>&1 | tee -a "$LOG_FILE"
 else
     error "wget not found. Cannot download SpoolUp."
     exit 1
