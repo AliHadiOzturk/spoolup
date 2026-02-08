@@ -129,6 +129,14 @@ log "⬇️  Step 3: Extracting SpoolUp..."
 info "Extracting embedded SpoolUp bundle..."
 
 # Extract the embedded tarball from this script
+# Check if script is being run from a file (not piped)
+if [ ! -f "$0" ]; then
+    error "This script must be saved to a file before running."
+    error "Please run: wget -O /tmp/install_k1.sh https://raw.githubusercontent.com/AliHadiOzturk/spoolup/main/install_k1.sh"
+    error "Then: sh /tmp/install_k1.sh"
+    exit 1
+fi
+
 cd /tmp
 sed -n '/^__SPOOLUP_BUNDLE__$/,/^__END_SPOOLUP_BUNDLE__$/p' "$0" | sed '1d;$d' | base64 -d > spoolup-bundle.tar.gz
 
