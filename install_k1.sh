@@ -282,7 +282,7 @@ log ""
 log "🛠️  Step 8: Creating helper scripts..."
 
 # Create status script
-cat > "$INSTALL_DIR/status.sh" << 'EOF'
+cat > "$INSTALL_DIR/status.sh" << EOF
 #!/bin/sh
 # SpoolUp Status Checker
 
@@ -292,10 +292,16 @@ echo "========================================"
 echo ""
 
 # Check if service is running
-if systemctl is-active --quiet spoolup; then
-    echo "✓ Service Status: RUNNING"
+if [ "$INIT_TYPE" = "systemd" ]; then
+    if systemctl is-active --quiet spoolup 2>/dev/null; then
+        echo "✓ Service Status: RUNNING"
+    else
+        echo "✗ Service Status: STOPPED"
+    fi
+elif [ "$INIT_TYPE" = "initd" ]; then
+    /etc/init.d/S99${SERVICE_NAME} status
 else
-    echo "✗ Service Status: STOPPED"
+    echo "? Service Status: UNKNOWN (manual start required)"
 fi
 
 echo ""
@@ -307,9 +313,15 @@ echo ""
 echo "========================================"
 echo ""
 echo "Useful commands:"
-echo "  Start:   systemctl start spoolup"
-echo "  Stop:    systemctl stop spoolup"
-echo "  Restart: systemctl restart spoolup"
+if [ "$INIT_TYPE" = "systemd" ]; then
+    echo "  Start:   systemctl start spoolup"
+    echo "  Stop:    systemctl stop spoolup"
+    echo "  Restart: systemctl restart spoolup"
+elif [ "$INIT_TYPE" = "initd" ]; then
+    echo "  Start:   /etc/init.d/S99${SERVICE_NAME} start"
+    echo "  Stop:    /etc/init.d/S99${SERVICE_NAME} stop"
+    echo "  Restart: /etc/init.d/S99${SERVICE_NAME} restart"
+fi
 echo "  Logs:    tail -f /var/log/spoolup.log"
 echo ""
 EOF
@@ -389,10 +401,22 @@ echo "   Run: $INSTALL_DIR/authenticate.sh"
 echo "   (for authentication options)"
 echo ""
 echo "4️⃣  Start the service:"
-echo "   systemctl start spoolup"
-echo ""
-echo "5️⃣  Enable auto-start on boot:"
-echo "   systemctl enable spoolup"
+if [ "$INIT_TYPE" = "systemd" ]; then
+    echo "   systemctl start spoolup"
+    echo ""
+    echo "5️⃣  Enable auto-start on boot:"
+    echo "   systemctl enable spoolup"
+elif [ "$INIT_TYPE" = "initd" ]; then
+    echo "   /etc/init.d/S99${SERVICE_NAME} start"
+    echo ""
+    echo "5️⃣  Enable auto-start on boot:"
+    echo "   The service will start automatically on boot (S99 prefix)"
+else
+    echo "   cd $INSTALL_DIR && python3 spoolup.py"
+    echo ""
+    echo "5️⃣  Enable auto-start on boot:"
+    echo "   Manual start required - add to /etc/init.d/ scripts"
+fi
 echo ""
 echo "📊 Check status:"
 echo "   $INSTALL_DIR/status.sh"
