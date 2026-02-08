@@ -232,15 +232,20 @@ For **Creality K1, K1 Max, and K1C** printers with rooted firmware, use the auto
 ### Quick Install
 
 ```bash
-# 1. Download and run the installer on your K1
+# 1. SSH into your K1 printer
 ssh root@<your_printer_ip>
-curl -fsSL https://raw.githubusercontent.com/AliHadiOzturk/spoolup/main/install_k1.sh | bash
 
-# Or manually:
+# 2. Download and run the installer using wget
+# (The K1's curl has SSL limitations, so we use wget)
+wget -O - https://raw.githubusercontent.com/AliHadiOzturk/spoolup/main/install_k1.sh | sh
+
+# Or manually copy the script:
 # scp install_k1.sh root@<your_printer_ip>:/tmp/
 # ssh root@<your_printer_ip>
-# bash /tmp/install_k1.sh
+# sh /tmp/install_k1.sh
 ```
+
+**Note:** The installer downloads SpoolUp from the [GitHub releases page](https://github.com/AliHadiOzturk/spoolup/releases), which is more reliable than the archive download on the K1's limited SSL/TLS stack.
 
 ### K1-Specific Configuration
 
