@@ -129,53 +129,25 @@ log "⬇️  Step 3: Downloading SpoolUp..."
 info "Downloading latest version from GitHub..."
 cd /tmp
 
-# Download the repository
-# Try multiple wget approaches for K1's limited SSL/TLS support
-DOWNLOAD_SUCCESS=false
+# Download the repository from GitHub release
+RELEASE_URL="https://github.com/AliHadiOzturk/spoolup/releases/download/v1.0.0/spoolup-v1.0.0.tar.gz"
+info "Downloading from release: v1.0.0"
 
-# Method 1: Try using raw content URL (often works better on K1)
-if ! $DOWNLOAD_SUCCESS && wget -O spoolup.tar.gz "https://raw.githubusercontent.com/AliHadiOzturk/spoolup/main/spoolup.tar.gz" 2>&1 | tee -a "$LOG_FILE"; then
-    if [ -f spoolup.tar.gz ] && [ -s spoolup.tar.gz ]; then
-        DOWNLOAD_SUCCESS=true
-    fi
-fi
-
-# Method 2: Try GitHub archive URL with http:// instead of https://
-if ! $DOWNLOAD_SUCCESS; then
-    rm -f spoolup.tar.gz
-    if wget -O spoolup.tar.gz "http://github.com/AliHadiOzturk/spoolup/archive/refs/heads/main.tar.gz" 2>&1 | tee -a "$LOG_FILE"; then
-        if [ -f spoolup.tar.gz ] && [ -s spoolup.tar.gz ]; then
-            DOWNLOAD_SUCCESS=true
-        fi
-    fi
-fi
-
-# Method 3: Try with --no-check-certificate if supported
-if ! $DOWNLOAD_SUCCESS; then
-    rm -f spoolup.tar.gz
-    if wget --no-check-certificate -O spoolup.tar.gz "https://github.com/AliHadiOzturk/spoolup/archive/refs/heads/main.tar.gz" 2>&1 | tee -a "$LOG_FILE"; then
-        if [ -f spoolup.tar.gz ] && [ -s spoolup.tar.gz ]; then
-            DOWNLOAD_SUCCESS=true
-        fi
-    fi
-fi
-
-if ! $DOWNLOAD_SUCCESS; then
-    error "Failed to download SpoolUp. All download methods failed."
-    error "Please manually download the repository and copy it to your K1."
+if ! wget -O spoolup.tar.gz "$RELEASE_URL" 2>&1 | tee -a "$LOG_FILE"; then
+    error "Failed to download SpoolUp from release"
     exit 1
 fi
 
-# Extract and copy files
-if [ -f spoolup.tar.gz ]; then
-    tar -xzf spoolup.tar.gz
-    cp -r spoolup-main/* "$INSTALL_DIR/"
-    rm -rf spoolup.tar.gz spoolup-main
-    success "Files installed to $INSTALL_DIR"
-else
-    error "Failed to download SpoolUp"
+# Verify download succeeded
+if [ ! -f spoolup.tar.gz ] || [ ! -s spoolup.tar.gz ]; then
+    error "Downloaded file is empty or missing"
     exit 1
 fi
+
+# Extract directly to install directory (release tarball has files at root)
+tar -xzf spoolup.tar.gz -C "$INSTALL_DIR/"
+rm -f spoolup.tar.gz
+success "Files installed to $INSTALL_DIR"
 
 # Step 4: Install Python dependencies
 log ""
