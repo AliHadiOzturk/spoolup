@@ -190,11 +190,27 @@ log "🐍 Step 4: Installing Python dependencies..."
 
 cd "$INSTALL_DIR"
 
+# Try to install cryptography from Entware if available
+if command -v opkg &> /dev/null; then
+    info "Checking for pre-built cryptography package..."
+    opkg install python3-cryptography 2>/dev/null || warning "python3-cryptography not available via Entware, will try pip"
+fi
+
 # Install dependencies using detected Python
-if ! $PIP install -r requirements.txt 2>&1 | tee -a "$LOG_FILE"; then
-    error "Failed to install Python dependencies"
-    error "Try running manually: $PIP install -r requirements.txt"
-    exit 1
+# Use --prefer-binary to avoid building from source on embedded systems
+info "Installing dependencies (this may take a while)..."
+if ! $PIP install -r requirements.txt --prefer-binary 2>&1 | tee -a "$LOG_FILE"; then
+    warning "Installation with Entware Python failed, trying system Python..."
+    
+    if [ -x "/usr/bin/python3" ]; then
+        info "Attempting installation with system Python..."
+        /usr/bin/python3 -m pip install -r requirements.txt --prefer-binary 2>&1 | tee -a "$LOG_FILE"
+        warning "Switching to system Python (/usr/bin/python3) for service..."
+        PYTHON="/usr/bin/python3"
+    else
+        error "Failed to install Python dependencies with both Python versions"
+        exit 1
+    fi
 fi
 
 # Verify key imports work with detected Python

@@ -4,6 +4,9 @@ google-auth-httplib2>=0.1.1
 google-auth-oauthlib>=1.0.0
 google-auth>=2.22.0
 
+# Cryptography - use older version that doesn't require Rust (for embedded systems)
+cryptography<3.4; platform_machine=='mips' or platform_machine=='mipsel'
+
 # WebSocket client for Moonraker
 websocket-client>=1.6.0
 
