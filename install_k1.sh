@@ -26,6 +26,21 @@ INSTALL_DIR="/usr/data/printer_data/config/spoolup"
 SERVICE_NAME="spoolup"
 LOG_FILE="/var/log/spoolup-install.log"
 
+# Detect which Python to use (prefer Entware over system)
+if [ -x "/opt/bin/python3" ]; then
+    PYTHON="/opt/bin/python3"
+    PIP="/opt/bin/python3 -m pip"
+    info "Using Entware Python: $PYTHON"
+elif [ -x "/usr/bin/python3" ]; then
+    PYTHON="/usr/bin/python3"
+    PIP="/usr/bin/python3 -m pip"
+    info "Using system Python: $PYTHON"
+else
+    PYTHON="python3"
+    PIP="python3 -m pip"
+    warning "Using default Python from PATH"
+fi
+
 # Logging function
 log() {
     echo -e "$1" | tee -a "$LOG_FILE"
@@ -99,13 +114,32 @@ else
 fi
 
 # Verify Python
-if command -v python3 &> /dev/null; then
-    PYTHON_VERSION=$(python3 --version 2>&1 | cut -d' ' -f2)
+if command -v "$PYTHON" &> /dev/null; then
+    PYTHON_VERSION=$($PYTHON --version 2>&1 | cut -d' ' -f2)
     success "Python version: $PYTHON_VERSION"
 else
     error "Python3 not found. Please install Python3 first."
     exit 1
 fi
+
+# Verify pip is available
+if ! $PIP --version &> /dev/null; then
+    error "pip is not installed for Python3"
+    info "Attempting to install pip..."
+    
+    # Try to install pip via Entware if available
+    if command -v opkg &> /dev/null; then
+        opkg install python3-pip >> "$LOG_FILE" 2>&1
+    fi
+    
+    # Check again if pip is now available
+    if ! $PIP --version &> /dev/null; then
+        error "Failed to install pip. Please install python3-pip manually:"
+        error "  opkg install python3-pip"
+        exit 1
+    fi
+fi
+success "pip is available"
 
 # Verify FFmpeg
 if command -v ffmpeg &> /dev/null; then
@@ -155,7 +189,21 @@ log ""
 log "🐍 Step 4: Installing Python dependencies..."
 
 cd "$INSTALL_DIR"
-python3 -m pip install -r requirements.txt --quiet 2>&1 | tee -a "$LOG_FILE"
+
+# Install dependencies using detected Python
+if ! $PIP install -r requirements.txt 2>&1 | tee -a "$LOG_FILE"; then
+    error "Failed to install Python dependencies"
+    error "Try running manually: $PIP install -r requirements.txt"
+    exit 1
+fi
+
+# Verify key imports work with detected Python
+if ! $PYTHON -c "import requests, websocket, googleapiclient.discovery" 2>/dev/null; then
+    error "Python dependencies installed but imports failed"
+    error "This may indicate a permission or path issue"
+    exit 1
+fi
+
 success "Python dependencies installed"
 
 # Step 5: Create configuration
@@ -210,7 +258,7 @@ Wants=network-online.target
 Type=simple
 User=root
 WorkingDirectory=/usr/data/printer_data/config/spoolup
-ExecStart=/usr/bin/python3 /usr/data/printer_data/config/spoolup/spoolup.py -c /usr/data/printer_data/config/spoolup/config.json
+ExecStart=$PYTHON /usr/data/printer_data/config/spoolup/spoolup.py -c /usr/data/printer_data/config/spoolup/config.json
 Restart=always
 RestartSec=10
 StandardOutput=append:/var/log/spoolup.log
@@ -224,21 +272,21 @@ EOF
     success "Systemd service created: ${SERVICE_NAME}.service"
 elif [ -d "/etc/init.d" ]; then
     # OpenWrt/Buildroot init.d
-    cat > /etc/init.d/S99${SERVICE_NAME} << 'EOF'
+    cat > /etc/init.d/S99${SERVICE_NAME} << EOF
 #!/bin/sh
 # SpoolUp service script for K1
 
 start() {
     echo "Starting SpoolUp..."
     cd /usr/data/printer_data/config/spoolup
-    /usr/bin/python3 spoolup.py -c /usr/data/printer_data/config/spoolup/config.json > /var/log/spoolup.log 2>&1 &
-    echo $! > /var/run/spoolup.pid
+    $PYTHON spoolup.py -c /usr/data/printer_data/config/spoolup/config.json > /var/log/spoolup.log 2>&1 &
+    echo \$! > /var/run/spoolup.pid
 }
 
 stop() {
     echo "Stopping SpoolUp..."
     if [ -f /var/run/spoolup.pid ]; then
-        kill $(cat /var/run/spoolup.pid) 2>/dev/null
+        kill \$(cat /var/run/spoolup.pid) 2>/dev/null
         rm -f /var/run/spoolup.pid
     fi
 }
@@ -251,7 +299,7 @@ restart() {
 
 status() {
     if [ -f /var/run/spoolup.pid ]; then
-        if kill -0 $(cat /var/run/spoolup.pid) 2>/dev/null; then
+        if kill -0 \$(cat /var/run/spoolup.pid) 2>/dev/null; then
             echo "SpoolUp is running"
         else
             echo "SpoolUp is not running (stale pid file)"
@@ -261,12 +309,12 @@ status() {
     fi
 }
 
-case "$1" in
+case "\$1" in
     start) start ;;
     stop) stop ;;
     restart) restart ;;
     status) status ;;
-    *) echo "Usage: $0 {start|stop|restart|status}"; exit 1 ;;
+    *) echo "Usage: \$0 {start|stop|restart|status}"; exit 1 ;;
 esac
 EOF
     chmod +x /etc/init.d/S99${SERVICE_NAME}
