@@ -26,20 +26,6 @@ INSTALL_DIR="/usr/data/printer_data/config/spoolup"
 SERVICE_NAME="spoolup"
 LOG_FILE="/var/log/spoolup-install.log"
 
-# Detect which Python to use (prefer Entware over system)
-if [ -x "/opt/bin/python3" ]; then
-    PYTHON="/opt/bin/python3"
-    PIP="/opt/bin/python3 -m pip"
-    info "Using Entware Python: $PYTHON"
-elif [ -x "/usr/bin/python3" ]; then
-    PYTHON="/usr/bin/python3"
-    PIP="/usr/bin/python3 -m pip"
-    info "Using system Python: $PYTHON"
-else
-    PYTHON="python3"
-    PIP="python3 -m pip"
-    warning "Using default Python from PATH"
-fi
 
 # Logging function
 log() {
@@ -61,6 +47,22 @@ warning() {
 info() {
     echo -e "${BLUE}ℹ $1${NC}" | tee -a "$LOG_FILE"
 }
+
+# Detect which Python to use (prefer Entware over system)
+if [ -x "/opt/bin/python3" ]; then
+    PYTHON="/opt/bin/python3"
+    PIP="/opt/bin/python3 -m pip"
+    info "Using Entware Python: $PYTHON"
+elif [ -x "/usr/bin/python3" ]; then
+    PYTHON="/usr/bin/python3"
+    PIP="/usr/bin/python3 -m pip"
+    info "Using system Python: $PYTHON"
+else
+    PYTHON="python3"
+    PIP="python3 -m pip"
+    warning "Using default Python from PATH"
+fi
+
 
 echo ""
 echo "========================================"
