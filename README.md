@@ -249,14 +249,14 @@ sh /tmp/install_k1.sh
 # sh /tmp/install_k1.sh
 ```
 
-**Note:** The installer downloads SpoolUp from the [GitHub releases page](https://github.com/AliHadiOzturk/spoolup/releases), which is more reliable than the archive download on the K1's limited SSL/TLS stack.
+**Note:** The install script contains the complete SpoolUp codebase embedded as a base64-encoded tarball. No external downloads are required, making it work even on the K1's limited SSL/TLS environment.
 
 ### K1-Specific Configuration
 
 The installer automatically configures SpoolUp for K1 paths:
 - **Installation directory**: `/usr/data/printer_data/config/spoolup/`
 - **Timelapse directory**: `/usr/data/printer_data/timelapse/`
-- **Service**: Runs as systemd service under root
+- **Service**: Runs as init.d service under root (K1 uses OpenWrt/Buildroot, not systemd)
 - **Logs**: `/var/log/spoolup.log`
 
 ### YouTube Authentication on K1
@@ -279,26 +279,28 @@ The K1 doesn't have a browser, so follow the **"If Installing ON Your Printer"**
 
 ### Managing the Service on K1
 
+The installer automatically detects your init system (systemd or init.d) and creates the appropriate service.
+
+**For K1 (init.d):**
 ```bash
 # Start SpoolUp
-systemctl start spoolup
+/etc/init.d/S99spoolup start
 
 # Stop SpoolUp
-systemctl stop spoolup
+/etc/init.d/S99spoolup stop
 
 # Restart SpoolUp
-systemctl restart spoolup
+/etc/init.d/S99spoolup restart
 
 # Check status
-systemctl status spoolup
+/etc/init.d/S99spoolup status
 /usr/data/printer_data/config/spoolup/status.sh
-
-# Enable auto-start on boot
-systemctl enable spoolup
 
 # View logs
 tail -f /var/log/spoolup.log
 ```
+
+**Note:** The K1 uses OpenWrt/Buildroot with init.d (not systemd). The `S99` prefix ensures SpoolUp starts automatically on boot.
 
 ## 🔧 Configuration Options
 
