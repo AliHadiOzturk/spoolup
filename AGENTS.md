@@ -177,3 +177,10 @@ spoolup/
 - Service account authentication would need cryptography (RSA signing), but SpoolUp uses user OAuth
 - HTTPS/TLS is handled by Python's `ssl` module and system OpenSSL
 - This avoids compilation issues on embedded systems (MIPS) without a C compiler
+
+### Error State Handling
+- SpoolUp treats Klipper "error" state as transient (similar to a pause)
+- Live stream continues during error state - no interruption
+- If print recovers and resumes, stream continues automatically
+- Stream only stops on "complete" or "cancelled" states
+- This prevents transient errors from interrupting live streams

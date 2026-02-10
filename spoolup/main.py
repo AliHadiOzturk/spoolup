@@ -186,12 +186,24 @@ class MoonrakerClient:
                     self.print_state = new_state
                     logger.info(f"Print state changed: {old_state} -> {new_state}")
 
-                    if new_state == "printing" and old_state != "printing":
+                    if new_state == "printing" and old_state not in ["printing"]:
                         self.on_print_started(stats.get("filename"))
-                    elif new_state == "complete" and old_state == "printing":
+                    elif new_state == "complete" and old_state in [
+                        "printing",
+                        "error",
+                        "paused",
+                    ]:
                         self.on_print_completed(stats.get("filename"))
-                    elif new_state == "cancelled" and old_state == "printing":
+                    elif new_state == "cancelled" and old_state in [
+                        "printing",
+                        "error",
+                        "paused",
+                    ]:
                         self.on_print_cancelled(stats.get("filename"))
+                    elif new_state == "error" and old_state == "printing":
+                        logger.warning(
+                            "Print error detected - stream continuing. Waiting for recovery or completion..."
+                        )
 
             if "filename" in stats:
                 self.current_file = stats["filename"]
