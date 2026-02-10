@@ -138,7 +138,7 @@ A browser window will open automatically. Sign in with your Google account and a
 
 ```bash
 # On your PC/Mac, copy the token to your printer
-scp youtube_token.json root@<printer_ip>:/usr/data/printer_data/config/spoolup/
+scp youtube_token.json root@<printer_ip>:/usr/data/spoolup/
 ```
 
 For Sonic Pad:
@@ -165,7 +165,7 @@ sudo systemctl enable spoolup  # Auto-start on boot
 
 ```bash
 # Check status
-/usr/data/printer_data/config/spoolup/status.sh
+/usr/data/spoolup/status.sh
 
 # Or view logs
 tail -f /var/log/spoolup.log
@@ -244,7 +244,7 @@ spoolup/
 You need to authenticate on your PC/Mac first:
 ```bash
 python -m spoolup_auth --client-secrets client_secrets.json
-scp youtube_token.json root@<printer_ip>:/usr/data/printer_data/config/spoolup/
+scp youtube_token.json root@<printer_ip>:/usr/data/spoolup/
 ```
 
 ### "Credentials are invalid or expired"
@@ -252,7 +252,7 @@ scp youtube_token.json root@<printer_ip>:/usr/data/printer_data/config/spoolup/
 Re-authenticate on your PC/Mac:
 ```bash
 python -m spoolup_auth --client-secrets client_secrets.json
-scp youtube_token.json root@<printer_ip>:/usr/data/printer_data/config/spoolup/
+scp youtube_token.json root@<printer_ip>:/usr/data/spoolup/
 ```
 
 Then restart SpoolUp on the printer.
@@ -277,7 +277,7 @@ tail -n 50 /var/log/spoolup.log
 
 Verify the token file exists:
 ```bash
-ls -la /usr/data/printer_data/config/spoolup/youtube_token.json
+ls -la /usr/data/spoolup/youtube_token.json
 ```
 
 ## 🔄 Updating SpoolUp
@@ -289,7 +289,7 @@ To update SpoolUp to the latest version:
 ssh root@<printer_ip>
 
 # Go to the SpoolUp directory
-cd /usr/data/printer_data/config/spoolup
+cd /usr/data/spoolup
 
 # Pull latest changes
 git pull
@@ -312,7 +312,7 @@ rm -f /etc/init.d/S99spoolup
 rm -f /etc/systemd/system/spoolup.service
 
 # Remove installation directory
-rm -rf /usr/data/printer_data/config/spoolup
+rm -rf /usr/data/spoolup
 rm -rf ~/spoolup-env
 ```
 

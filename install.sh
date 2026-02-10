@@ -70,7 +70,7 @@ IS_K2_OS=0
  detect_os() {
     if grep -Fqs "ID=buildroot" /etc/os-release 2>/dev/null; then
         IS_K1_OS=1
-        INSTALL_DIR="/usr/data/printer_data/config/spoolup"
+        INSTALL_DIR="/usr/data/spoolup"
         VENV_DIR="/usr/data/spoolup-env"
     elif grep -Fqs "sonic" /etc/openwrt_release 2>/dev/null; then
         IS_SONIC_PAD_OS=1
