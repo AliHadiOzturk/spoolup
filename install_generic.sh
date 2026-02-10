@@ -33,7 +33,7 @@ log "📦 Starting installation..."
 if [ -d "/usr/data" ]; then
     # K1 Max with Creality OS
     log "🔍 Detected: Creality K1 Max (Creality OS)"
-    INSTALL_DIR="/usr/data/printer_data/config/spoolup"
+    INSTALL_DIR="/usr/data/spoolup"
     USER_HOME="/root"
     PYTHON_CMD="python3"
 elif [ -d "/home/pi" ]; then
@@ -142,8 +142,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/usr/data/printer_data/config/spoolup
-ExecStart=/usr/bin/python3 /usr/data/printer_data/config/spoolup/spoolup.py -c /usr/data/printer_data/config/spoolup/config.json
+WorkingDirectory=/usr/data/spoolup
+ExecStart=/usr/bin/python3 /usr/data/spoolup/spoolup.py -c /usr/data/spoolup/config.json
 Restart=always
 RestartSec=10
 StandardOutput=append:/var/log/spoolup.log

@@ -22,7 +22,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-INSTALL_DIR="/usr/data/printer_data/config/spoolup"
+INSTALL_DIR="/usr/data/spoolup"
 SERVICE_NAME="spoolup"
 LOG_FILE="/var/log/spoolup-install.log"
 
@@ -275,8 +275,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/usr/data/printer_data/config/spoolup
-ExecStart=$PYTHON /usr/data/printer_data/config/spoolup/spoolup.py -c /usr/data/printer_data/config/spoolup/config.json
+WorkingDirectory=/usr/data/spoolup
+ExecStart=$PYTHON /usr/data/spoolup/spoolup.py -c /usr/data/spoolup/config.json
 Restart=always
 RestartSec=10
 StandardOutput=append:/var/log/spoolup.log
@@ -296,8 +296,8 @@ elif [ -d "/etc/init.d" ]; then
 
 start() {
     echo "Starting SpoolUp..."
-    cd /usr/data/printer_data/config/spoolup
-    $PYTHON spoolup.py -c /usr/data/printer_data/config/spoolup/config.json > /var/log/spoolup.log 2>&1 &
+    cd /usr/data/spoolup
+    $PYTHON spoolup.py -c /usr/data/spoolup/config.json > /var/log/spoolup.log 2>&1 &
     echo \$! > /var/run/spoolup.pid
 }
 
@@ -428,15 +428,15 @@ echo "3. Authenticate on the PC:"
 echo "   python3 spoolup.py --auth-only"
 echo ""
 echo "4. Copy the generated token to your K1:"
-echo "   scp youtube_token.json root@<printer_ip>:/usr/data/printer_data/config/spoolup/"
+echo "   scp youtube_token.json root@<printer_ip>:/usr/data/spoolup/"
 echo ""
 echo "OPTION 2: Headless Authentication on K1"
 echo "----------------------------------------"
 echo "1. Copy your client_secrets.json to:"
-echo "   /usr/data/printer_data/config/spoolup/client_secrets.json"
+echo "   /usr/data/spoolup/client_secrets.json"
 echo ""
 echo "2. Run authentication on K1:"
-echo "   cd /usr/data/printer_data/config/spoolup"
+echo "   cd /usr/data/spoolup"
 echo "   python3 spoolup.py --auth-only --headless"
 echo ""
 echo "3. The script will display a URL. Copy this URL to your PC's browser."
