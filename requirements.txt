@@ -5,9 +5,6 @@
 google-api-python-client>=2.100.0
 google-auth>=2.22.0
 
-# Cryptography - use older version for embedded systems (no Rust required)
-cryptography<3.4; platform_machine=='mips' or platform_machine=='mipsel'
-
 # WebSocket client for Moonraker
 websocket-client>=1.6.0
 
