@@ -1,0 +1,12 @@
+# Authentication requirements for PC/Mac
+# These are ONLY needed for the spoolup-auth tool
+# Run on your computer to generate the token file, NOT on the printer
+
+# YouTube OAuth authentication libraries
+google-auth-oauthlib>=1.0.0
+google-auth-httplib2>=0.1.1
+google-auth>=2.22.0
+google-api-python-client>=2.100.0
+
+# HTTP requests
+requests>=2.31.0
