@@ -1,10 +1,11 @@
-# YouTube API and Authentication
+# Core requirements for SpoolUp runtime (installed on printer)
+# These are the minimal dependencies needed to run SpoolUp
+
+# YouTube API (runtime only - no OAuth flow)
 google-api-python-client>=2.100.0
-google-auth-httplib2>=0.1.1
-google-auth-oauthlib>=1.0.0
 google-auth>=2.22.0
 
-# Cryptography - use older version that doesn't require Rust (for embedded systems)
+# Cryptography - use older version for embedded systems (no Rust required)
 cryptography<3.4; platform_machine=='mips' or platform_machine=='mipsel'
 
 # WebSocket client for Moonraker
