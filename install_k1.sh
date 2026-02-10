@@ -192,12 +192,6 @@ log "🐍 Step 4: Installing Python dependencies..."
 
 cd "$INSTALL_DIR"
 
-# Try to install cryptography from Entware if available
-if command -v opkg &> /dev/null; then
-    info "Checking for pre-built cryptography package..."
-    opkg install python3-cryptography 2>/dev/null || warning "python3-cryptography not available via Entware, will try pip"
-fi
-
 # Install dependencies using detected Python
 # Use --prefer-binary to avoid building from source on embedded systems
 info "Installing dependencies (this may take a while)..."
