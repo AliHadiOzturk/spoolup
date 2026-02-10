@@ -17,103 +17,80 @@ SpoolUp is a Python application that connects your Klipper-based 3D printer (lik
 - 🚀 **Real-time Detection** - Monitors print status via WebSocket for instant response
 - 📱 **Notifications** - Sends print status updates with stream URLs
 - 🐳 **Service Mode** - Can run as a systemd service for always-on operation
+- 🔒 **Separate Authentication** - Authenticate on your PC/Mac, run on your printer
 
 ## 📋 Requirements
 
+### On Your Printer
 - Python 3.7 or higher
-- Klipper firmware with Moonraker API enabled
+- Git (for cloning the repository)
 - FFmpeg installed on your system
-- YouTube Data API v3 credentials
+- Klipper firmware with Moonraker API enabled
 - A webcam configured with your Klipper setup
+
+### On Your PC/Mac
+- YouTube Data API v3 credentials
+- Python 3.7+ (for authentication tool)
+
+## 🏗️ Architecture
+
+SpoolUp uses a **split architecture** to avoid installing unnecessary packages on your printer:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    YOUR PC / MAC                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │  spoolup-auth                                       │   │
+│  │  • Runs OAuth flow with browser                     │   │
+│  │  • Generates youtube_token.json                     │   │
+│  │  • Needs: google-auth-oauthlib (NOT on printer!)    │   │
+│  └─────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              │ scp youtube_token.json
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    YOUR PRINTER (K1/etc)                     │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │  SpoolUp Runtime                                    │   │
+│  │  • Monitors Moonraker WebSocket                     │   │
+│  │  • Streams to YouTube via FFmpeg                    │   │
+│  │  • Uploads timelapses                               │   │
+│  │  • Needs: google-api-python-client (NO OAuth libs)  │   │
+│  └─────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Why this approach?**
+- **Smaller footprint** - No OAuth libraries on printer (saves ~50MB)
+- **No browser needed** - Authentication happens on PC with browser
+- **Easier setup** - Just copy a token file, no headless auth hassle
+- **Proven on K1/K2** - Works reliably on Creality embedded Linux systems
 
 ## 🚀 Quick Start
 
-### 📍 Where to Install SpoolUp?
+### Step 1: Install SpoolUp on Your Printer
 
-SpoolUp needs to run **on a machine that can access both your printer and the internet**. You have two main options:
-
-#### Option A: Install ON Your Printer (Recommended)
-
-**Best for:** Creality K1/K1 Max/K1C, Raspberry Pi setups, or any Linux-based printer with root access
-
-- ✅ Always running (even when your PC is off)
-- ✅ Direct access to printer's Moonraker API
-- ✅ Can run as a system service
-- ⚠️ Requires SSH access to the printer
-- ⚠️ YouTube authentication needs special handling (no browser on printer)
-
-**For K1 users:** Use the [K1 Installation Script](#️-creality-k1-installation) below
-
-#### Option B: Install ON Your PC/Mac
-
-**Best for:** Testing, development, or printers without SSH access
-
-- ✅ Easier setup (you have a browser for authentication)
-- ✅ Easier debugging and log viewing
-- ⚠️ PC must stay on during prints
-- ⚠️ PC must be on the same network as the printer
-
-**Note:** If installing on PC, make sure your PC has a stable network connection to the printer throughout the print.
-
----
-
-### 🖨️ Installation ON the Printer (K1/K1 Max/K1C)
-
-See the [Creality K1 Installation](#️-creality-k1-installation) section below for the automated installer.
-
-### 💻 Installation ON Your PC/Mac
-
-#### 1. Clone the Repository
+**For Creality K1 / K1 Max / K1C / K2:**
 
 ```bash
-cd ~
-git clone https://github.com/AliHadiOzturk/spoolup.git
-cd spoolup
+# SSH into your printer
+ssh root@<your_printer_ip>
+
+# Clone the repository and run the installer
+git clone https://github.com/AliHadiOzturk/spoolup.git /tmp/spoolup
+cd /tmp/spoolup
+sh install.sh
 ```
 
-#### 2. Install Dependencies
+The installer features:
+- **Interactive confirmation** - You'll be asked to confirm before installation
+- **Nice UI** - Box-drawn interface with clear status messages
+- **OS auto-detection** - Automatically detects K1, K2, Sonic Pad, or generic Linux
+- **Virtual environment** - Creates isolated Python environment
+- **Service creation** - Sets up auto-start service for your init system
 
-```bash
-pip install -r requirements.txt
-```
-
-#### 3. Install FFmpeg
-
-```bash
-# macOS
-brew install ffmpeg
-
-# Ubuntu/Debian
-sudo apt-get install ffmpeg
-
-# Windows
-# Download from https://ffmpeg.org/download.html and add to PATH
-```
-
-#### 4. Configure for Remote Printer
-
-When running on your PC, you need to point SpoolUp to your printer's Moonraker API:
-
-```json
-{
-  "moonraker_url": "http://192.168.1.100:7125",
-  "webcam_url": "http://192.168.1.100:8080/?action=stream",
-  "timelapse_dir": "/path/to/timelapse/on/printer",
-  "client_secrets_file": "client_secrets.json",
-  "token_file": "youtube_token.json",
-  "stream_resolution": "1280x720",
-  "stream_fps": 30,
-  "stream_bitrate": "4000k"
-}
-```
-
-**Note:** `timelapse_dir` should be a path accessible from the PC (e.g., network share) if you want timelapse upload. If not, disable timelapse upload and only use live streaming.
-
----
-
-### 🔐 YouTube API Setup (Both Options)
-
-#### 5. Set Up YouTube API Credentials
+### Step 2: Get YouTube API Credentials
 
 1. Go to [Google Cloud Console](https://console.cloud.google.com/)
 2. Create a new project or select an existing one
@@ -124,183 +101,124 @@ When running on your PC, you need to point SpoolUp to your printer's Moonraker A
 4. Create OAuth 2.0 credentials:
    - Go to "Credentials" in the left menu
    - Click "Create Credentials" → "OAuth client ID"
-   - Choose "Desktop app" as the application type
+   - Choose **"Desktop app"** as the application type
    - Give it a name (e.g., "SpoolUp")
    - Click "Create"
 5. Download the client secrets:
-    - Click the download icon next to your credentials
-    - Save the file as `client_secrets.json` in the spoolup directory
+   - Click the download icon next to your credentials
+   - Save as `client_secrets.json` on your PC/Mac
 
----
+### Step 3: Authenticate on Your PC/Mac
 
-### ⚙️ Configuration
-
-Create a sample configuration:
+**Option A: Using pip (Recommended)**
 
 ```bash
-python spoolup.py --create-config
+# On your PC/Mac
+pip install -r https://raw.githubusercontent.com/AliHadiOzturk/spoolup/main/requirements-auth.txt
+
+# Run authentication
+python -m spoolup_auth --client-secrets /path/to/client_secrets.json
+
+# This creates youtube_token.json in your current directory
 ```
 
-Edit `config.json` with your settings:
-
-```json
-{
-  "moonraker_url": "http://localhost:7125",
-  "webcam_url": "http://localhost:8080/?action=stream",
-  "timelapse_dir": "/home/user/printer_data/timelapse",
-  "client_secrets_file": "client_secrets.json",
-  "token_file": "youtube_token.json",
-  "stream_resolution": "1280x720",
-  "stream_fps": 30,
-  "stream_bitrate": "4000k",
-  "stream_privacy": "unlisted",
-  "youtube_category_id": "28",
-  "video_privacy": "private",
-  "enable_live_stream": true,
-  "enable_timelapse_upload": true
-}
-```
-
----
-
-### 🔑 Authentication
-
-#### If Installing ON Your PC/Mac:
-
-Run the authentication flow (opens browser automatically):
+**Option B: Clone the repo**
 
 ```bash
-python spoolup.py --auth-only
+# On your PC/Mac
+git clone https://github.com/AliHadiOzturk/spoolup.git
+cd spoolup
+pip install -r requirements-auth.txt
+python -m spoolup_auth --client-secrets /path/to/client_secrets.json
 ```
 
-#### If Installing ON Your Printer (K1):
+A browser window will open automatically. Sign in with your Google account and authorize SpoolUp.
 
-Since the printer has no browser, you have two options:
-
-**Option 1: Authenticate on PC, Copy Token to Printer (Recommended)**
-
-1. On your PC/Mac (same one you downloaded SpoolUp to):
-   ```bash
-   python3 spoolup.py --auth-only
-   ```
-   This opens a browser and creates `youtube_token.json`
-
-2. Copy the token to your printer:
-   ```bash
-   scp youtube_token.json root@<printer_ip>:/usr/data/printer_data/config/spoolup/
-   ```
-
-**Option 2: Headless Authentication on Printer**
-
-1. SSH to your printer and run:
-   ```bash
-   python3 spoolup.py --auth-only --headless
-   ```
-
-2. Copy the displayed URL to your PC's browser
-
-3. Authorize and copy the authorization code
-
-4. Paste the code back in the SSH session
-
----
-
-### 🧪 Test Your Setup
-
-Run the verification script to check everything is configured correctly:
+### Step 4: Copy Token to Your Printer
 
 ```bash
-python test_setup.py
+# On your PC/Mac, copy the token to your printer
+scp youtube_token.json root@<printer_ip>:/usr/data/printer_data/config/spoolup/
 ```
 
----
-
-### ▶️ Run SpoolUp
-
+For Sonic Pad:
 ```bash
-# Run manually to test
-python spoolup.py
-
-# Or with a custom config file
-python spoolup.py -c /path/to/config.json
+scp youtube_token.json root@<printer_ip>:/usr/share/spoolup/
 ```
 
-## 🖨️ Creality K1 Installation
+### Step 5: Start SpoolUp
 
-For **Creality K1, K1 Max, and K1C** printers with rooted firmware, use the automated installer:
-
-### Quick Install
-
-**Important:** The install script must be saved to a file first (not piped directly to sh) because it contains an embedded SpoolUp bundle.
-
+**For K1 / K2 / Sonic Pad:**
 ```bash
-# 1. SSH into your K1 printer
-ssh root@<your_printer_ip>
-
-# 2. Download the installer to a file
-wget -O /tmp/install_k1.sh https://raw.githubusercontent.com/AliHadiOzturk/spoolup/main/install_k1.sh
-
-# 3. Run the installer
-sh /tmp/install_k1.sh
-
-# Or copy from your PC:
-# scp install_k1.sh root@<your_printer_ip>:/tmp/
-# ssh root@<your_printer_ip>
-# sh /tmp/install_k1.sh
-```
-
-**Note:** The install script contains the complete SpoolUp codebase embedded as a base64-encoded tarball. No external downloads are required, making it work even on the K1's limited SSL/TLS environment.
-
-### K1-Specific Configuration
-
-The installer automatically configures SpoolUp for K1 paths:
-- **Installation directory**: `/usr/data/printer_data/config/spoolup/`
-- **Timelapse directory**: `/usr/data/printer_data/timelapse/`
-- **Service**: Runs as init.d service under root (K1 uses OpenWrt/Buildroot, not systemd)
-- **Logs**: `/var/log/spoolup.log`
-
-### YouTube Authentication on K1
-
-The K1 doesn't have a browser, so follow the **"If Installing ON Your Printer"** instructions in the [Authentication section](#-authentication) above.
-
-**Quick Summary:**
-
-1. **Get YouTube API credentials** from Google Cloud Console
-2. **Copy `client_secrets.json`** to your K1:
-   ```bash
-   scp client_secrets.json root@<printer_ip>:/usr/data/printer_data/config/spoolup/
-   ```
-3. **Authenticate using your PC** (recommended):
-   ```bash
-   # On your PC
-   python3 spoolup.py --auth-only
-   scp youtube_token.json root@<printer_ip>:/usr/data/printer_data/config/spoolup/
-   ```
-
-### Managing the Service on K1
-
-The installer automatically detects your init system (systemd or init.d) and creates the appropriate service.
-
-**For K1 (init.d):**
-```bash
-# Start SpoolUp
+# SSH into printer and start the service
+ssh root@<printer_ip>
 /etc/init.d/S99spoolup start
+```
 
-# Stop SpoolUp
-/etc/init.d/S99spoolup stop
+**For Generic Linux:**
+```bash
+sudo systemctl start spoolup
+sudo systemctl enable spoolup  # Auto-start on boot
+```
 
-# Restart SpoolUp
-/etc/init.d/S99spoolup restart
+### Step 6: Verify It's Working
 
+```bash
 # Check status
-/etc/init.d/S99spoolup status
 /usr/data/printer_data/config/spoolup/status.sh
 
-# View logs
+# Or view logs
 tail -f /var/log/spoolup.log
 ```
 
-**Note:** The K1 uses OpenWrt/Buildroot with init.d (not systemd). The `S99` prefix ensures SpoolUp starts automatically on boot.
+## 🖥️ Installation on PC/Mac (Alternative)
+
+If you prefer to run SpoolUp on your computer instead of the printer:
+
+```bash
+# Clone the repository
+git clone https://github.com/AliHadiOzturk/spoolup.git
+cd spoolup
+
+# Install runtime dependencies
+pip install -r requirements.txt
+
+# Authenticate
+pip install -r requirements-auth.txt
+python -m spoolup_auth --client-secrets /path/to/client_secrets.json
+
+# Run SpoolUp
+python -m spoolup -c config.json
+```
+
+**Note:** When running on PC, update `config.json` to point to your printer's IP:
+```json
+{
+  "moonraker_url": "http://192.168.1.100:7125",
+  "webcam_url": "http://192.168.1.100:8080/?action=stream",
+  "timelapse_dir": "/path/to/timelapse"
+}
+```
+
+## 📁 Project Structure
+
+```
+spoolup/
+├── install.sh                 # Main installer (interactive shell script)
+├── requirements.txt           # Core runtime dependencies (printer)
+├── requirements-auth.txt      # Auth dependencies (PC/Mac only)
+├── README.md                  # This file
+│
+├── spoolup/                   # Runtime package (runs on printer)
+│   ├── __init__.py
+│   ├── __main__.py
+│   └── main.py               # Core application (NO auth flow)
+│
+└── spoolup_auth/              # Authentication tool (PC/Mac only)
+    ├── __init__.py
+    ├── __main__.py
+    └── main.py               # OAuth flow with browser
+```
 
 ## 🔧 Configuration Options
 
@@ -311,201 +229,92 @@ tail -f /var/log/spoolup.log
 | `timelapse_dir` | Directory where timelapse videos are saved | `/home/user/printer_data/timelapse` |
 | `client_secrets_file` | Path to Google OAuth client secrets | `client_secrets.json` |
 | `token_file` | Path to save YouTube authentication token | `youtube_token.json` |
-| `stream_resolution` | Live stream resolution (e.g., 1280x720) | `1280x720` |
+| `stream_resolution` | Live stream resolution | `1280x720` |
 | `stream_fps` | Live stream frame rate | `30` |
 | `stream_bitrate` | Live stream video bitrate | `4000k` |
-| `stream_privacy` | Live stream privacy (public/unlisted/private) | `unlisted` |
-| `video_privacy` | Uploaded timelapse privacy (public/unlisted/private) | `private` |
-| `youtube_category_id` | YouTube category ID for uploads | `28` (Science & Technology) |
-| `enable_live_stream` | Enable live streaming feature | `true` |
-| `enable_timelapse_upload` | Enable timelapse upload feature | `true` |
-
-## 🖥️ Run as a Service
-
-To run SpoolUp automatically on boot:
-
-```bash
-# Copy the service file
-sudo cp spoolup.service /etc/systemd/system/
-
-# Edit the service file to match your setup (if needed)
-sudo nano /etc/systemd/system/spoolup.service
-
-# Reload systemd and enable the service
-sudo systemctl daemon-reload
-sudo systemctl enable spoolup.service
-sudo systemctl start spoolup.service
-
-# Check status
-sudo systemctl status spoolup.service
-
-# View logs
-sudo tail -f /var/log/spoolup.log
-```
-
-## 📖 Usage
-
-Once SpoolUp is running:
-
-1. **Start a print** - SpoolUp will automatically create a YouTube Live stream and start streaming your webcam feed
-2. **Check the logs** - Watch the console output or check `/tmp/spoolup.log`
-3. **View the live stream** - The YouTube Live URL will be logged when the stream starts
-4. **Complete the print** - The live stream will automatically end and the timelapse will be uploaded as a draft
-5. **Publish the timelapse** - Go to YouTube Studio to edit the description and publish the video
-
-### Command Line Options
-
-```bash
-python spoolup.py [OPTIONS]
-
-Options:
-  -c, --config PATH       Path to configuration file (default: config.json)
-  --create-config         Create a sample configuration file
-  --auth-only             Only authenticate with YouTube and exit
-  --headless              Use headless authentication (for machines without browser)
-  -h, --help              Show help message
-```
-
-**Authentication Options:**
-
-- **`--auth-only`**: Run authentication flow and exit (useful for setup)
-- **`--headless`**: Use console-based authentication instead of browser (for headless machines like K1)
-
-Common authentication scenarios:
-
-```bash
-# Desktop with browser (opens browser automatically)
-python spoolup.py --auth-only
-
-# Headless machine (shows URL to open on another device)
-python spoolup.py --auth-only --headless
-
-# Run the service
-python spoolup.py
-```
+| `stream_privacy` | Live stream privacy | `unlisted` |
+| `video_privacy` | Uploaded timelapse privacy | `private` |
+| `enable_live_stream` | Enable live streaming | `true` |
+| `enable_timelapse_upload` | Enable timelapse upload | `true` |
 
 ## 🐛 Troubleshooting
 
-### Setup Test Failures
+### "Token file not found"
 
-Run `python test_setup.py` to diagnose issues:
-
+You need to authenticate on your PC/Mac first:
 ```bash
-# Test Python version
-python --version  # Should be 3.7+
-
-# Test imports
-python -c "import requests, websocket, googleapiclient.discovery"
-
-# Test FFmpeg
-ffmpeg -version
+python -m spoolup_auth --client-secrets client_secrets.json
+scp youtube_token.json root@<printer_ip>:/usr/data/printer_data/config/spoolup/
 ```
 
-### FFmpeg Not Found
+### "Credentials are invalid or expired"
 
-Install FFmpeg:
-
+Re-authenticate on your PC/Mac:
 ```bash
-# For K1 Max (Entware)
+python -m spoolup_auth --client-secrets client_secrets.json
+scp youtube_token.json root@<printer_ip>:/usr/data/printer_data/config/spoolup/
+```
+
+Then restart SpoolUp on the printer.
+
+### FFmpeg not found
+
+Install FFmpeg on your printer:
+```bash
+# K1 with Entware
 opkg install ffmpeg
 
-# Verify installation
-which ffmpeg
-ffmpeg -version
+# Generic Linux
+sudo apt-get install ffmpeg
 ```
 
-### Authentication Issues
+### Service won't start
 
-If authentication fails:
+Check the logs:
+```bash
+tail -n 50 /var/log/spoolup.log
+```
 
-1. Delete the `youtube_token.json` file
-2. Re-run authentication: `python spoolup.py --auth-only`
-3. Ensure your `client_secrets.json` is valid and placed in the correct directory
+Verify the token file exists:
+```bash
+ls -la /usr/data/printer_data/config/spoolup/youtube_token.json
+```
 
-**For headless machines (K1, servers without browser):**
+## 🔄 Updating SpoolUp
 
-If you see an error about "cannot open browser" or "webbrowser" module:
-
-1. **Use headless mode** (requires copy-pasting the authorization code):
-   ```bash
-   python spoolup.py --auth-only --headless
-   ```
-
-2. **Or authenticate on a different machine** (recommended for K1):
-   - Run authentication on your PC/Mac: `python spoolup.py --auth-only`
-   - Copy the generated `youtube_token.json` to your K1:
-     ```bash
-     scp youtube_token.json root@<k1_ip>:/usr/data/printer_data/config/spoolup/
-     ```
-
-### Stream Not Starting
-
-Check the FFmpeg command:
-
-1. Enable debug logging by setting the log level in the script
-2. Check `/tmp/spoolup.log` for FFmpeg error messages
-3. Verify your webcam URL is accessible: `curl http://localhost:8080/?action=stream`
-
-### Timelapse Not Found
-
-Ensure the timelapse directory path is correct:
+To update SpoolUp to the latest version:
 
 ```bash
-# Check if the directory exists
-ls -la /path/to/timelapse/dir
+# SSH into your printer
+ssh root@<printer_ip>
 
-# Check Moonraker timelapse settings
-curl http://localhost:7125/server/timelapse/settings
+# Go to the SpoolUp directory
+cd /usr/data/printer_data/config/spoolup
+
+# Pull latest changes
+git pull
+
+# Re-run the installer
+sh install.sh
+
+# Restart the service
+/etc/init.d/S99spoolup restart
 ```
 
-### WebSocket Connection Issues
+## 🗑️ Uninstalling
 
-If SpoolUp can't connect to Moonraker:
+```bash
+# Stop the service
+/etc/init.d/S99spoolup stop  # or: systemctl stop spoolup
 
-1. Verify Moonraker is running: `systemctl status moonraker`
-2. Check the Moonraker URL in your config
-3. Ensure the URL is accessible: `curl http://localhost:7125/printer/info`
+# Remove service files
+rm -f /etc/init.d/S99spoolup
+rm -f /etc/systemd/system/spoolup.service
 
-## 🏗️ Architecture
-
-SpoolUp consists of several key components:
-
-- **SpoolUp** - Main application class that orchestrates everything
-- **MoonrakerClient** - WebSocket client for real-time printer status
-- **YouTubeStreamer** - Handles YouTube Live stream creation and FFmpeg streaming
-- **YouTubeUploader** - Manages timelapse video uploads
-- **Config** - Configuration management
-
-The application runs as a long-lived service, monitoring your printer via WebSocket and automatically responding to print state changes.
-
-## 🔒 Security Notes
-
-- Keep your `client_secrets.json` and `youtube_token.json` secure - they contain OAuth credentials
-- Don't commit these files to public repositories
-- Consider setting uploaded videos to "private" by default (configurable in settings)
-- The default log file location is `/tmp/spoolup.log` (cleared on reboot) or `/var/log/spoolup.log` (persistent)
-
-## 📁 File Structure
-
+# Remove installation directory
+rm -rf /usr/data/printer_data/config/spoolup
+rm -rf ~/spoolup-env
 ```
-spoolup/
-├── spoolup.py              # Main application
-├── test_setup.py           # Setup verification script
-├── requirements.txt        # Python dependencies
-├── install_k1.sh           # K1-specific installation script
-├── install_generic.sh      # Generic Linux installation script
-├── spoolup.service         # Systemd service file (K1-optimized)
-├── config.json             # Your configuration (not in repo)
-├── config.json.sample      # Sample configuration
-├── client_secrets.json     # YouTube API credentials (you provide)
-├── youtube_token.json      # Generated after authentication
-├── README.md               # This file
-└── AGENTS.md               # Guidelines for AI agents
-```
-
-## 🛠️ Development
-
-See `AGENTS.md` for coding guidelines if you're contributing to the project.
 
 ## 🤝 Contributing
 
@@ -513,14 +322,12 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## 📄 License
 
-MIT License - Feel free to modify and distribute. See LICENSE file for details.
+MIT License - Feel free to modify and distribute.
 
-## 📞 Support
+## 🙏 Credits
 
-For issues, questions, or contributions:
-- Check the troubleshooting section above
-- Review the logs at `/tmp/spoolup.log`
-- Open an issue on the repository
+- Uses [Klipper](https://www.klipper3d.org/) and [Moonraker](https://moonraker.readthedocs.io/)
+- YouTube integration via [Google API Client](https://github.com/googleapis/google-api-python-client)
 
 ---
 
