@@ -338,10 +338,38 @@ class YouTubeStreamer:
 
     def _transition_broadcast(self, broadcast_id: str, status: str):
         try:
+            broadcast = (
+                self.youtube.liveBroadcasts()
+                .list(part="status", id=broadcast_id)
+                .execute()
+            )
+
+            if not broadcast.get("items"):
+                logger.warning(f"Broadcast {broadcast_id} not found")
+                return
+
+            current_status = broadcast["items"][0]["status"]["lifeCycleStatus"]
+
+            valid_transitions = {
+                "created": ["testing"],
+                "testing": ["live"],
+                "live": ["complete"],
+            }
+
+            if current_status == status:
+                logger.info(f"Broadcast already in '{status}' state")
+                return
+
+            if status not in valid_transitions.get(current_status, []):
+                logger.warning(
+                    f"Cannot transition from '{current_status}' to '{status}'"
+                )
+                return
+
             self.youtube.liveBroadcasts().transition(
                 id=broadcast_id, part="status", broadcastStatus=status
             ).execute()
-            logger.info(f"Broadcast transitioned to: {status}")
+            logger.info(f"Broadcast transitioned from '{current_status}' to '{status}'")
         except Exception as e:
             logger.error(f"Failed to transition broadcast: {e}")
 
