@@ -77,7 +77,7 @@ def test_config():
 
     if not os.path.exists(config_file):
         print(f"  ✗ Configuration file not found: {config_file}")
-        print("  Run: python spoolup.py --create-config")
+        print("  Create a config.json file (see README.md for example)")
         return False
 
     try:
@@ -234,7 +234,7 @@ def main():
 
     if passed == total:
         print("\n🎉 All tests passed! You're ready to run the streamer.")
-        print("   Run: python spoolup.py --auth-only")
+        print("   Run: python -m spoolup_auth --client-secrets client_secrets.json")
         return 0
     else:
         print("\n⚠️  Some tests failed. Please fix the issues above.")

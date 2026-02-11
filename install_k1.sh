@@ -270,7 +270,7 @@ Wants=network-online.target
 Type=simple
 User=root
 WorkingDirectory=/usr/data/spoolup
-ExecStart=$PYTHON /usr/data/spoolup/spoolup.py -c /usr/data/spoolup/config.json
+ExecStart=$PYTHON -m spoolup -c /usr/data/spoolup/config.json
 Restart=always
 RestartSec=10
 StandardOutput=append:/var/log/spoolup.log
@@ -291,7 +291,7 @@ elif [ -d "/etc/init.d" ]; then
 start() {
     echo "Starting SpoolUp..."
     cd /usr/data/spoolup
-    $PYTHON spoolup.py -c /usr/data/spoolup/config.json > /var/log/spoolup.log 2>&1 &
+    $PYTHON -m spoolup -c /usr/data/spoolup/config.json > /var/log/spoolup.log 2>&1 &
     echo \$! > /var/run/spoolup.pid
 }
 
@@ -419,7 +419,7 @@ echo ""
 echo "2. Copy your client_secrets.json to the PC"
 echo ""
 echo "3. Authenticate on the PC:"
-echo "   python3 spoolup.py --auth-only"
+echo "   python3 -m spoolup --auth-only"
 echo ""
 echo "4. Copy the generated token to your K1:"
 echo "   scp youtube_token.json root@<printer_ip>:/usr/data/spoolup/"
@@ -431,7 +431,7 @@ echo "   /usr/data/spoolup/client_secrets.json"
 echo ""
 echo "2. Run authentication on K1:"
 echo "   cd /usr/data/spoolup"
-echo "   python3 spoolup.py --auth-only --headless"
+echo "   python3 -m spoolup_auth --client-secrets client_secrets.json"
 echo ""
 echo "3. The script will display a URL. Copy this URL to your PC's browser."
 echo ""
@@ -480,7 +480,7 @@ elif [ "$INIT_TYPE" = "initd" ]; then
     echo "5️⃣  Enable auto-start on boot:"
     echo "   The service will start automatically on boot (S99 prefix)"
 else
-    echo "   cd $INSTALL_DIR && python3 spoolup.py"
+    echo "   cd $INSTALL_DIR && python3 -m spoolup -c config.json"
     echo ""
     echo "5️⃣  Enable auto-start on boot:"
     echo "   Manual start required - add to /etc/init.d/ scripts"
