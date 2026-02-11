@@ -143,7 +143,7 @@ Wants=network-online.target
 Type=simple
 User=root
 WorkingDirectory=/usr/data/spoolup
-ExecStart=/usr/bin/python3 /usr/data/spoolup/spoolup.py -c /usr/data/spoolup/config.json
+ExecStart=/usr/bin/python3 -m spoolup -c /usr/data/spoolup/config.json
 Restart=always
 RestartSec=10
 StandardOutput=append:/var/log/spoolup.log
@@ -164,7 +164,7 @@ Wants=network-online.target
 Type=simple
 User=$USER
 WorkingDirectory=$INSTALL_DIR
-ExecStart=/usr/bin/python3 $INSTALL_DIR/spoolup.py -c $INSTALL_DIR/config.json
+ExecStart=/usr/bin/python3 -m spoolup -c $INSTALL_DIR/config.json
 Restart=always
 RestartSec=10
 StandardOutput=append:/var/log/spoolup.log
@@ -201,7 +201,7 @@ echo "   - Download and save as: $INSTALL_DIR/client_secrets.json"
 echo ""
 echo "2. 🔐 Authenticate with YouTube:"
 echo "   cd $INSTALL_DIR"
-echo "   python3 spoolup.py --auth-only"
+echo "   python3 -m spoolup_auth --client-secrets client_secrets.json"
 echo ""
 echo "3. ▶️  Start the service:"
 echo "   systemctl start spoolup.service"
