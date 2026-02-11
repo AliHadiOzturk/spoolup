@@ -373,7 +373,7 @@ class YouTubeStreamer:
         """Transition broadcast status"""
         try:
             self.youtube.liveBroadcasts().transition(
-                broadcastId=broadcast_id, part="status", broadcastStatus=status
+                id=broadcast_id, part="status", broadcastStatus=status
             ).execute()
             logger.info(f"Broadcast transitioned to: {status}")
         except Exception as e:
