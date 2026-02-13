@@ -235,6 +235,18 @@ class MoonrakerClient:
             logger.error(f"Failed to get timelapse config: {e}")
             return {}
 
+    def get_print_status(self) -> dict:
+        try:
+            response = requests.get(
+                f"{self.base_url}/printer/objects/query", params={"print_stats": None}
+            )
+            response.raise_for_status()
+            result = response.json().get("result", {})
+            return result.get("status", {}).get("print_stats", {})
+        except Exception as e:
+            logger.error(f"Failed to get print status: {e}")
+            return {}
+
     def disconnect(self):
         if self.ws:
             self.ws.close()
@@ -771,6 +783,17 @@ This timelapse was automatically generated using Moonraker Timelapse plugin and 
 
         logger.info("Connected to Moonraker. Monitoring for print events...")
         logger.info("Press Ctrl+C to exit")
+
+        # Check if already printing when application starts
+        print_status = self.moonraker.get_print_status()
+        if print_status.get("state") == "printing":
+            filename = print_status.get("filename") or "Unknown"
+            logger.info(f"Print already in progress: {filename}")
+            self.moonraker.print_state = "printing"
+            self.moonraker.current_file = filename
+            self.on_print_started(filename)
+        elif print_status.get("state"):
+            self.moonraker.print_state = print_status.get("state")
 
         try:
             while True:
