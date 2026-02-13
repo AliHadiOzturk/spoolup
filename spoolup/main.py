@@ -327,9 +327,23 @@ class YouTubeStreamer:
             ).execute()
 
             logger.info("Stream bound to broadcast")
-            self._transition_broadcast(broadcast_id, "testing")
 
-            return True
+            # Wait for YouTube to process the binding
+            time.sleep(2)
+
+            # Try to transition to testing with retries
+            for attempt in range(3):
+                if self._transition_broadcast(broadcast_id, "testing"):
+                    return True
+                logger.warning(
+                    f"Transition to testing failed (attempt {attempt + 1}/3)"
+                )
+                time.sleep(2)
+
+            logger.error(
+                "Failed to transition broadcast to testing state after all retries"
+            )
+            return False
 
         except HttpError as e:
             logger.error(f"YouTube API error: {e}")
@@ -338,7 +352,7 @@ class YouTubeStreamer:
             logger.error(f"Failed to create live stream: {e}")
             return False
 
-    def _transition_broadcast(self, broadcast_id: str, status: str):
+    def _transition_broadcast(self, broadcast_id: str, status: str) -> bool:
         try:
             broadcast = (
                 self.youtube.liveBroadcasts()
@@ -348,7 +362,7 @@ class YouTubeStreamer:
 
             if not broadcast.get("items"):
                 logger.warning(f"Broadcast {broadcast_id} not found")
-                return
+                return False
 
             current_status = broadcast["items"][0]["status"]["lifeCycleStatus"]
 
@@ -361,20 +375,22 @@ class YouTubeStreamer:
 
             if current_status == status:
                 logger.info(f"Broadcast already in '{status}' state")
-                return
+                return True
 
             if status not in valid_transitions.get(current_status, []):
                 logger.warning(
                     f"Cannot transition from '{current_status}' to '{status}'"
                 )
-                return
+                return False
 
             self.youtube.liveBroadcasts().transition(
                 id=broadcast_id, part="status", broadcastStatus=status
             ).execute()
             logger.info(f"Broadcast transitioned from '{current_status}' to '{status}'")
+            return True
         except Exception as e:
             logger.error(f"Failed to transition broadcast: {e}")
+            return False
 
     def start_streaming(self, webcam_url: str):
         if not self.stream_url:
