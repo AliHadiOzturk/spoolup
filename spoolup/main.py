@@ -339,23 +339,7 @@ class YouTubeStreamer:
             ).execute()
 
             logger.info("Stream bound to broadcast")
-
-            # Wait for YouTube to process the binding
-            time.sleep(2)
-
-            # Try to transition to testing with retries
-            for attempt in range(3):
-                if self._transition_broadcast(broadcast_id, "testing"):
-                    return True
-                logger.warning(
-                    f"Transition to testing failed (attempt {attempt + 1}/3)"
-                )
-                time.sleep(2)
-
-            logger.error(
-                "Failed to transition broadcast to testing state after all retries"
-            )
-            return False
+            return True
 
         except HttpError as e:
             logger.error(f"YouTube API error: {e}")
@@ -363,6 +347,32 @@ class YouTubeStreamer:
         except Exception as e:
             logger.error(f"Failed to create live stream: {e}")
             return False
+
+    def _wait_for_stream_active(self, stream_id: str, timeout: int = 30) -> bool:
+        """Wait for the stream to become active (receiving data from FFmpeg)."""
+        logger.info(f"Waiting for stream {stream_id} to become active...")
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            try:
+                stream = (
+                    self.youtube.liveStreams()
+                    .list(part="status", id=stream_id)
+                    .execute()
+                )
+                if stream.get("items"):
+                    status = stream["items"][0]["status"]["streamStatus"]
+                    logger.info(f"Stream status: {status}")
+                    if status == "active":
+                        logger.info("Stream is now active")
+                        return True
+                    elif status == "error":
+                        logger.error("Stream is in error state")
+                        return False
+            except Exception as e:
+                logger.warning(f"Failed to check stream status: {e}")
+            time.sleep(2)
+        logger.warning(f"Stream did not become active within {timeout} seconds")
+        return False
 
     def _transition_broadcast(self, broadcast_id: str, status: str) -> bool:
         try:
@@ -465,7 +475,7 @@ class YouTubeStreamer:
                 universal_newlines=True,
             )
 
-            time.sleep(2)
+            time.sleep(3)
             if self.ffmpeg_process.poll() is not None:
                 if self.ffmpeg_process.stderr:
                     stderr = self.ffmpeg_process.stderr.read()
@@ -474,13 +484,25 @@ class YouTubeStreamer:
                     logger.error("FFmpeg failed to start")
                 return False
 
-            if self.live_broadcast:
-                # Wait for FFmpeg to start sending data, then transition to live
-                time.sleep(3)
-                if not self._transition_broadcast(self.live_broadcast["id"], "live"):
-                    logger.warning(
-                        "Could not transition to live state, but stream is running"
-                    )
+            if self.live_stream and self.live_broadcast:
+                stream_id = self.live_stream["id"]
+                broadcast_id = self.live_broadcast["id"]
+
+                # Wait for stream to become active (receiving data)
+                if not self._wait_for_stream_active(stream_id, timeout=30):
+                    logger.error("Stream did not become active, cannot proceed")
+                    return False
+
+                # Transition to testing
+                if not self._transition_broadcast(broadcast_id, "testing"):
+                    logger.error("Failed to transition to testing state")
+                    return False
+
+                time.sleep(2)
+
+                # Transition to live
+                if not self._transition_broadcast(broadcast_id, "live"):
+                    logger.warning("Failed to transition to live state")
 
             self.is_streaming = True
             logger.info("Live streaming started")
