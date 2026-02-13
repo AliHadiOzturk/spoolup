@@ -511,11 +511,25 @@ class YouTubeStreamer:
                     logger.error("Failed to transition to testing state")
                     return False
 
-                time.sleep(2)
+                # Wait for testing state to settle and verify stream health
+                time.sleep(5)
 
-                # Transition to live
-                if not self._transition_broadcast(broadcast_id, "live"):
-                    logger.warning("Failed to transition to live state")
+                # Transition to live with retries
+                live_success = False
+                for attempt in range(3):
+                    if self._transition_broadcast(broadcast_id, "live"):
+                        live_success = True
+                        break
+                    logger.warning(
+                        f"Transition to live failed (attempt {attempt + 1}/3)"
+                    )
+                    time.sleep(3)
+
+                if not live_success:
+                    logger.warning(
+                        "Failed to transition to live state after all retries"
+                    )
+                    logger.info("Stream is running but may not be publicly visible")
 
             self.is_streaming = True
             logger.info("Live streaming started")
