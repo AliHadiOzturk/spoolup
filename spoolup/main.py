@@ -834,15 +834,20 @@ This timelapse was automatically generated using Moonraker Timelapse plugin and 
         logger.info("Press Ctrl+C to exit")
 
         # Check if already printing when application starts
+        logger.info("Checking current print status...")
         print_status = self.moonraker.get_print_status()
-        if print_status.get("state") == "printing":
+        current_state = print_status.get("state", "unknown")
+        logger.info(f"Current print state from Moonraker: {current_state}")
+
+        if current_state == "printing":
             filename = print_status.get("filename") or "Unknown"
             logger.info(f"Print already in progress: {filename}")
             self.moonraker.print_state = "printing"
             self.moonraker.current_file = filename
             self.on_print_started(filename)
-        elif print_status.get("state"):
-            self.moonraker.print_state = print_status.get("state")
+        elif current_state and current_state != "unknown":
+            logger.info(f"Print not active, current state: {current_state}")
+            self.moonraker.print_state = current_state
 
         try:
             while True:
