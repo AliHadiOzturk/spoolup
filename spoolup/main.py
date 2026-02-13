@@ -252,6 +252,8 @@ class YouTubeStreamer:
 
     def create_live_stream(self, title: str) -> bool:
         try:
+            if not title:
+                title = "3D Print"
             stream_insert_data = {
                 "snippet": {
                     "title": f"Live Stream - {title}",
@@ -351,7 +353,8 @@ class YouTubeStreamer:
             current_status = broadcast["items"][0]["status"]["lifeCycleStatus"]
 
             valid_transitions = {
-                "created": ["testing"],
+                "created": ["ready"],
+                "ready": ["testing"],
                 "testing": ["live"],
                 "live": ["complete"],
             }
