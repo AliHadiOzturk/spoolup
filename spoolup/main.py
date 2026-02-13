@@ -315,7 +315,7 @@ class YouTubeStreamer:
                         "enableMonitorStream": True,
                         "broadcastStreamDelayMs": 0,
                     },
-                    "enableAutoStart": True,
+                    "enableAutoStart": False,
                     "enableAutoStop": True,
                 },
             }
@@ -390,14 +390,27 @@ class YouTubeStreamer:
 
             valid_transitions = {
                 "created": ["ready"],
-                "ready": ["testing"],
+                "ready": ["testing", "live"],
+                "testStarting": ["testing"],
                 "testing": ["live"],
+                "liveStarting": ["live"],
                 "live": ["complete"],
             }
 
             if current_status == status:
                 logger.info(f"Broadcast already in '{status}' state")
                 return True
+
+            # Handle intermediate transition states
+            if current_status == "testStarting" and status == "testing":
+                logger.info("Broadcast is transitioning to testing, waiting...")
+                time.sleep(3)
+                return self._transition_broadcast(broadcast_id, status)
+
+            if current_status == "liveStarting" and status == "live":
+                logger.info("Broadcast is transitioning to live, waiting...")
+                time.sleep(3)
+                return self._transition_broadcast(broadcast_id, status)
 
             if status not in valid_transitions.get(current_status, []):
                 logger.warning(
