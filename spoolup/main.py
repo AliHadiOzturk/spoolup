@@ -463,7 +463,12 @@ class YouTubeStreamer:
                 return False
 
             if self.live_broadcast:
-                self._transition_broadcast(self.live_broadcast["id"], "live")
+                # Wait for FFmpeg to start sending data, then transition to live
+                time.sleep(3)
+                if not self._transition_broadcast(self.live_broadcast["id"], "live"):
+                    logger.warning(
+                        "Could not transition to live state, but stream is running"
+                    )
 
             self.is_streaming = True
             logger.info("Live streaming started")
