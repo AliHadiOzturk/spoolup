@@ -32,7 +32,7 @@ from googleapiclient.errors import HttpError
 # Optional import for SSL disable functionality
 _AuthHttpImportError = None
 try:
-    from google.auth.transport.httplib2 import AuthorizedHttp
+    import google_auth_httplib2
 
     HAS_AUTH_HTTP = True
 except ImportError as e:
@@ -828,7 +828,7 @@ class SpoolUp:
                     "SSL verification disabled - using unverified HTTPS context"
                 )
                 http = httplib2.Http(disable_ssl_certificate_validation=True)
-                authorized_http = AuthorizedHttp(creds, http=http)
+                authorized_http = google_auth_httplib2.AuthorizedHttp(creds, http=http)
                 self.youtube = build("youtube", "v3", http=authorized_http)
             else:
                 self.youtube = build("youtube", "v3", credentials=creds)
