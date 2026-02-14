@@ -12,6 +12,7 @@ import logging
 import argparse
 import subprocess
 import threading
+import tempfile
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, Callable
@@ -48,9 +49,11 @@ class Config:
         "timelapse_dir": "/home/user/printer_data/timelapse",
         "client_secrets_file": "client_secrets.json",
         "token_file": "youtube_token.json",
-        "stream_resolution": "480x360",
+        "stream_resolution": "1280x720",
         "stream_fps": 15,
         "stream_bitrate": "750k",
+        "timelapse_mode": "local",  # "local" or "remote"
+        "printer_ip": "",  # For remote timelapse mode (e.g., "192.168.1.100")
         "youtube_category_id": "28",
         "video_privacy": "private",
         "stream_privacy": "unlisted",
@@ -833,6 +836,12 @@ class SpoolUp:
                 self.streamer.stop_streaming()
 
     def _find_timelapse(self, filename: str) -> Optional[str]:
+        timelapse_mode = self.config.get("timelapse_mode", "local")
+
+        if timelapse_mode == "remote":
+            return self._download_remote_timelapse(filename)
+
+        # Local mode
         timelapse_dir = self.config.get("timelapse_dir")
 
         if not timelapse_dir or not os.path.isdir(timelapse_dir):
@@ -863,6 +872,79 @@ class SpoolUp:
 
         logger.warning(f"Timelapse file not found for: {filename}")
         return None
+
+    def _download_remote_timelapse(self, filename: str) -> Optional[str]:
+        """Download timelapse from remote printer via Moonraker API."""
+        printer_ip = self.config.get("printer_ip")
+        if not printer_ip:
+            logger.error("printer_ip not configured for remote timelapse mode")
+            return None
+
+        base_name = os.path.splitext(filename)[0]
+
+        try:
+            # List timelapse files from printer
+            list_url = f"http://{printer_ip}:4409/server/files/list?root=timelapse"
+            logger.info(f"Fetching timelapse list from: {list_url}")
+
+            response = requests.get(list_url, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+
+            files = data.get("result", [])
+            if not files:
+                logger.warning("No timelapse files found on printer")
+                return None
+
+            # Find matching timelapse file
+            timelapse_filename = None
+            for file_info in files:
+                file_name = file_info.get("filename", "")
+                if file_name.startswith(base_name) and file_name.endswith(
+                    (".mp4", ".mkv", ".avi")
+                ):
+                    timelapse_filename = file_name
+                    break
+
+            if not timelapse_filename:
+                logger.warning(f"No timelapse found for print: {filename}")
+                return None
+
+            # Download the timelapse file
+            download_url = (
+                f"http://{printer_ip}:7125/server/files/timelapse/{timelapse_filename}"
+            )
+            logger.info(f"Downloading timelapse: {download_url}")
+
+            # Create temp directory for downloaded file
+            temp_dir = tempfile.gettempdir()
+            local_path = os.path.join(temp_dir, timelapse_filename)
+
+            # Download with progress
+            response = requests.get(download_url, stream=True, timeout=300)
+            response.raise_for_status()
+
+            total_size = int(response.headers.get("content-length", 0))
+            downloaded = 0
+
+            with open(local_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total_size > 0 and downloaded % (1024 * 1024) == 0:
+                            progress = (downloaded / total_size) * 100
+                            logger.info(f"Download progress: {progress:.1f}%")
+
+            logger.info(f"Timelapse downloaded to: {local_path}")
+            return local_path
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to download timelapse from printer: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error downloading timelapse: {e}")
+            return None
 
     def _generate_description(self, filename: str) -> str:
         duration = "Unknown"
