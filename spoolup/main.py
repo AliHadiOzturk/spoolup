@@ -158,6 +158,14 @@ class MoonrakerClient:
                 else:
                     logger.info("Subscription confirmed")
                     self._subscription_pending = False
+                    # Extract initial state from subscription response
+                    result = data.get("result", {})
+                    if "status" in result:
+                        initial_status = result["status"]
+                        logger.info(
+                            f"Received initial state from subscription: {initial_status}"
+                        )
+                        self._handle_status_update(initial_status)
 
             elif "id" in data and data["id"] in self.callbacks:
                 callback = self.callbacks.pop(data["id"])
@@ -200,19 +208,28 @@ class MoonrakerClient:
 
                     if new_state == "printing" and old_state not in ["printing"]:
                         if self._initial_state_handled:
+                            logger.debug(
+                                f"Print start ignored - initial state already handled"
+                            )
                             return
+                        logger.info(
+                            f"Triggering print start callback for: {stats.get('filename')}"
+                        )
+                        self._initial_state_handled = True
                         self.on_print_started(stats.get("filename"))
                     elif new_state == "complete" and old_state in [
                         "printing",
                         "error",
                         "paused",
                     ]:
+                        self._initial_state_handled = False
                         self.on_print_completed(stats.get("filename"))
                     elif new_state == "cancelled" and old_state in [
                         "printing",
                         "error",
                         "paused",
                     ]:
+                        self._initial_state_handled = False
                         self.on_print_cancelled(stats.get("filename"))
                     elif new_state == "error" and old_state == "printing":
                         logger.warning(
@@ -910,22 +927,47 @@ This timelapse was automatically generated using Moonraker Timelapse plugin and 
         logger.info("Connected to Moonraker. Monitoring for print events...")
         logger.info("Press Ctrl+C to exit")
 
+        # Wait for subscription to be confirmed (initial state will come via WebSocket)
+        logger.info("Waiting for WebSocket subscription confirmation...")
+        timeout = 10
+        start = time.time()
+        while self.moonraker._subscription_pending and time.time() - start < timeout:
+            time.sleep(0.1)
+
+        if self.moonraker._subscription_pending:
+            logger.warning("Subscription confirmation timeout - proceeding anyway")
+        else:
+            logger.info(
+                "WebSocket subscription confirmed, initial state should be received"
+            )
+            # Give a moment for the initial status update to be processed
+            time.sleep(0.5)
+
         # Check if already printing when application starts
         logger.info("Checking current print status...")
         print_status = self.moonraker.get_print_status()
         current_state = print_status.get("state", "unknown")
-        logger.info(f"Current print state from Moonraker: {current_state}")
+        logger.info(f"HTTP API print state: {current_state}")
+        logger.info(f"WebSocket print state: {self.moonraker.print_state}")
 
-        if current_state == "printing":
-            filename = print_status.get("filename") or "Unknown"
+        # Use WebSocket state if HTTP returns unknown (more reliable)
+        effective_state = current_state
+        if current_state == "unknown" and self.moonraker.print_state != "unknown":
+            effective_state = self.moonraker.print_state
+            logger.info(f"Using WebSocket state instead of HTTP: {effective_state}")
+
+        if effective_state == "printing":
+            filename = (
+                print_status.get("filename") or self.moonraker.current_file or "Unknown"
+            )
             logger.info(f"Print already in progress: {filename}")
             self.moonraker.print_state = "printing"
             self.moonraker.current_file = filename
             self.moonraker._initial_state_handled = True
             self.on_print_started(filename)
-        elif current_state and current_state != "unknown":
-            logger.info(f"Print not active, current state: {current_state}")
-            self.moonraker.print_state = current_state
+        elif effective_state and effective_state != "unknown":
+            logger.info(f"Print not active, current state: {effective_state}")
+            self.moonraker.print_state = effective_state
 
         try:
             while True:
