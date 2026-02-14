@@ -262,19 +262,42 @@ class YouTubeStreamer:
         self.stream_url = None
         self.is_streaming = False
 
+    def _map_resolution_to_youtube_format(self, resolution: str) -> str:
+        resolution_map = {
+            "426x240": "240p",
+            "640x360": "360p",
+            "854x480": "480p",
+            "1280x720": "720p",
+            "1920x1080": "1080p",
+            "2560x1440": "1440p",
+            "3840x2160": "2160p",
+        }
+        return resolution_map.get(resolution, "variable")
+
+    def _map_fps_to_youtube_format(self, fps: int) -> str:
+        return "60fps" if fps >= 45 else "30fps"
+
     def create_live_stream(self, title: str) -> bool:
         try:
             if not title:
                 title = "3D Print"
+
+            config_resolution: str = self.config.get("stream_resolution") or "1280x720"
+            config_fps: int = self.config.get("stream_fps") or 30
+
+            youtube_resolution = self._map_resolution_to_youtube_format(
+                config_resolution
+            )
+            youtube_fps = self._map_fps_to_youtube_format(config_fps)
+
             stream_insert_data = {
                 "snippet": {
                     "title": f"Live Stream - {title}",
                 },
                 "cdn": {
-                    "format": "1080p",
                     "ingestionType": "rtmp",
-                    "resolution": "1080p",
-                    "frameRate": "30fps",
+                    "resolution": youtube_resolution,
+                    "frameRate": youtube_fps,
                 },
                 "contentDetails": {"isReusable": False},
             }
