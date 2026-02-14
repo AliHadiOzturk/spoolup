@@ -29,6 +29,14 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from googleapiclient.errors import HttpError
 
+# Optional import for SSL disable functionality
+try:
+    from google.auth.transport.httplib2 import AuthorizedHttp
+
+    HAS_AUTH_HTTP = True
+except ImportError:
+    HAS_AUTH_HTTP = False
+
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.force-ssl",
     "https://www.googleapis.com/auth/youtube.upload",
@@ -803,17 +811,21 @@ class SpoolUp:
                 return False
 
         try:
-            # Configure SSL context
             disable_ssl = self.config.get("disable_ssl_verify", False)
             if disable_ssl:
+                if not HAS_AUTH_HTTP:
+                    logger.error(
+                        "disable_ssl_verify requires google-auth-httplib2 package"
+                    )
+                    logger.error("Install it with: pip install google-auth-httplib2")
+                    return False
+
                 logger.warning(
                     "SSL verification disabled - using unverified HTTPS context"
                 )
-                # Create httplib2.Http with SSL verification disabled
                 http = httplib2.Http(disable_ssl_certificate_validation=True)
-                # Authorize the HTTP instance with credentials
-                creds.apply(http.request)
-                self.youtube = build("youtube", "v3", http=http)
+                authorized_http = AuthorizedHttp(creds, http=http)
+                self.youtube = build("youtube", "v3", http=authorized_http)
             else:
                 self.youtube = build("youtube", "v3", credentials=creds)
 
