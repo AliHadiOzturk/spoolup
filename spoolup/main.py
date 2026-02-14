@@ -746,17 +746,34 @@ class YouTubeStreamer:
         self._health_check_thread.start()
 
     def _update_broadcast_description(self, description: str) -> bool:
-        """Update the live broadcast description."""
+        """Update the live broadcast description while preserving other snippet fields."""
         try:
             if not self.live_broadcast:
                 return False
             broadcast_id = self.live_broadcast["id"]
+
+            # Fetch current broadcast details to get required fields
+            broadcast = (
+                self.youtube.liveBroadcasts()
+                .list(part="snippet", id=broadcast_id)
+                .execute()
+            )
+
+            if not broadcast.get("items"):
+                logger.warning(f"Broadcast {broadcast_id} not found for update")
+                return False
+
+            snippet = broadcast["items"][0]["snippet"]
+
             self.youtube.liveBroadcasts().update(
                 part="snippet",
                 body={
                     "id": broadcast_id,
                     "snippet": {
+                        "title": snippet.get("title", ""),
                         "description": description,
+                        "scheduledStartTime": snippet.get("scheduledStartTime"),
+                        "scheduledEndTime": snippet.get("scheduledEndTime"),
                     },
                 },
             ).execute()
