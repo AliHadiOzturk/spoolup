@@ -274,6 +274,7 @@ class YouTubeStreamer:
         self.live_stream = None
         self.stream_url = None
         self.is_streaming = False
+        self._health_check_thread = None
 
     def _map_resolution_to_youtube_format(self, resolution: str) -> str:
         resolution_map = {
@@ -463,6 +464,44 @@ class YouTubeStreamer:
             logger.error(f"Failed to transition broadcast: {e}")
             return False
 
+    def _check_stream_health(self) -> bool:
+        try:
+            if not self.live_stream:
+                return False
+            stream = (
+                self.youtube.liveStreams()
+                .list(part="status", id=self.live_stream["id"])
+                .execute()
+            )
+            if not stream.get("items"):
+                return False
+            status = stream["items"][0]["status"]
+            stream_status = status.get("streamStatus")
+            health = status.get("healthStatus", {}).get("status")
+            if stream_status == "error":
+                return False
+            if health == "bad":
+                return False
+            return True
+        except Exception as e:
+            logger.error(f"Health check error: {e}")
+            return False
+
+    def _health_check_loop(self):
+        while self.is_streaming:
+            time.sleep(30)
+            if not self.is_streaming:
+                break
+            if not self._check_stream_health():
+                logger.error("Stream health check failed, stopping stream")
+                self.stop_streaming()
+                break
+
+    def _start_health_monitor(self):
+        self._health_check_thread = threading.Thread(target=self._health_check_loop)
+        self._health_check_thread.daemon = True
+        self._health_check_thread.start()
+
     def start_streaming(self, webcam_url: str):
         if not self.stream_url:
             logger.error("No stream URL available")
@@ -568,6 +607,7 @@ class YouTubeStreamer:
                     logger.info("Stream is running but may not be publicly visible")
 
             self.is_streaming = True
+            self._start_health_monitor()
             logger.info("Live streaming started")
             return True
 
