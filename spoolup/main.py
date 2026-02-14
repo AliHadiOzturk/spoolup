@@ -101,6 +101,7 @@ class MoonrakerClient:
         self.connected = False
         self.print_state = "unknown"
         self.current_file = None
+        self._initial_state_handled = False
 
     def connect_websocket(self):
         try:
@@ -187,6 +188,8 @@ class MoonrakerClient:
                     logger.info(f"Print state changed: {old_state} -> {new_state}")
 
                     if new_state == "printing" and old_state not in ["printing"]:
+                        if self._initial_state_handled:
+                            return
                         self.on_print_started(stats.get("filename"))
                     elif new_state == "complete" and old_state in [
                         "printing",
@@ -867,6 +870,7 @@ This timelapse was automatically generated using Moonraker Timelapse plugin and 
             logger.info(f"Print already in progress: {filename}")
             self.moonraker.print_state = "printing"
             self.moonraker.current_file = filename
+            self.moonraker._initial_state_handled = True
             self.on_print_started(filename)
         elif current_state and current_state != "unknown":
             logger.info(f"Print not active, current state: {current_state}")
