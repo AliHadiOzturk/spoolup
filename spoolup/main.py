@@ -298,6 +298,19 @@ class YouTubeStreamer:
         self.is_streaming = False
         self._health_check_thread = None
 
+    def _check_ffmpeg_available(self) -> bool:
+        """Check if FFmpeg is installed and available in PATH."""
+        try:
+            subprocess.run(
+                ["ffmpeg", "-version"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True,
+            )
+            return True
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            return False
+
     def _map_resolution_to_youtube_format(self, resolution: str) -> str:
         resolution_map = {
             "426x240": "240p",
@@ -527,6 +540,15 @@ class YouTubeStreamer:
     def start_streaming(self, webcam_url: str):
         if not self.stream_url:
             logger.error("No stream URL available")
+            return False
+
+        # Check if FFmpeg is available
+        if not self._check_ffmpeg_available():
+            logger.error("FFmpeg not found! Please install FFmpeg:")
+            logger.error("  Windows: Download from https://ffmpeg.org/download.html")
+            logger.error("  Windows: Add FFmpeg bin folder to your PATH")
+            logger.error("  macOS: brew install ffmpeg")
+            logger.error("  Linux: sudo apt-get install ffmpeg")
             return False
 
         try:
