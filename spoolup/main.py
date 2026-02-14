@@ -102,6 +102,8 @@ class MoonrakerClient:
         self.print_state = "unknown"
         self.current_file = None
         self._initial_state_handled = False
+        self._subscription_msg_id: Optional[int] = None
+        self._subscription_pending = False
 
     def connect_websocket(self):
         try:
@@ -132,7 +134,8 @@ class MoonrakerClient:
     def _on_open(self, ws):
         logger.info("Moonraker WebSocket connected")
         self.connected = True
-        self._send_jsonrpc(
+        self._subscription_pending = True
+        self._subscription_msg_id = self._send_jsonrpc(
             "printer.objects.subscribe",
             {"objects": {"print_stats": None, "virtual_sdcard": None}},
         )
@@ -147,6 +150,13 @@ class MoonrakerClient:
 
                 if method == "notify_status_update":
                     self._handle_status_update(params[0] if params else {})
+
+            elif "id" in data and data["id"] == self._subscription_msg_id:
+                if data.get("error"):
+                    logger.error(f"Subscription failed: {data['error']}")
+                else:
+                    logger.info("Subscription confirmed")
+                    self._subscription_pending = False
 
             elif "id" in data and data["id"] in self.callbacks:
                 callback = self.callbacks.pop(data["id"])
