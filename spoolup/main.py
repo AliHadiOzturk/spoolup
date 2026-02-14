@@ -8,6 +8,7 @@ import os
 import sys
 import json
 import time
+import ssl
 import logging
 import argparse
 import subprocess
@@ -18,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, Callable
 
 import requests
+import urllib3
 import websocket
 import google.auth
 from google.auth.transport.requests import Request
@@ -62,6 +64,7 @@ class Config:
         "enable_timelapse_upload": True,
         "retry_attempts": 3,
         "retry_delay": 5,
+        "disable_ssl_verify": False,
     }
 
     def __init__(self, config_file: str = "config.json"):
@@ -799,7 +802,26 @@ class SpoolUp:
                 return False
 
         try:
-            self.youtube = build("youtube", "v3", credentials=creds)
+            # Configure SSL context
+            disable_ssl = self.config.get("disable_ssl_verify", False)
+            if disable_ssl:
+                logger.warning(
+                    "SSL verification disabled - using unverified HTTPS context"
+                )
+                ssl_context = ssl.create_default_context()
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_NONE
+                # Also disable urllib3 warnings
+                urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+                # Build with custom SSL context via http instance
+                from google.auth.transport.urllib3 import AuthorizedHttp
+
+                http = AuthorizedHttp(
+                    creds, urllib3.PoolManager(ssl_context=ssl_context)
+                )
+                self.youtube = build("youtube", "v3", http=http)
+            else:
+                self.youtube = build("youtube", "v3", credentials=creds)
 
             if self.config.get("enable_live_stream", True):
                 self.streamer = YouTubeStreamer(self.config, self.youtube)
@@ -810,6 +832,9 @@ class SpoolUp:
 
         except Exception as e:
             logger.error(f"Failed to build YouTube service: {e}")
+            logger.error(
+                "If you see SSL errors, try setting 'disable_ssl_verify': true in config.json"
+            )
             return False
 
     def on_print_started(self, filename: str):
