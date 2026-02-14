@@ -763,6 +763,7 @@ class YouTubeStreamer:
                     },
                 },
             ).execute()
+            logger.info(f"Successfully updated broadcast {broadcast_id} description")
             return True
         except Exception as e:
             logger.error(f"Failed to update broadcast description: {e}")
@@ -772,24 +773,37 @@ class YouTubeStreamer:
         """Periodically update broadcast description with fresh statistics."""
         update_interval = 15
         last_update = 0
+        logger.info("Description update loop started")
         while self.is_streaming:
             time.sleep(1)
             if not self.is_streaming:
+                logger.info("Description update loop stopping - stream ended")
                 break
             elapsed = time.time() - last_update
             if elapsed < update_interval:
                 continue
             try:
+                logger.info("Fetching fresh print stats for description update...")
                 print_stats = get_print_stats_callback()
+                logger.info(f"Got print stats: {print_stats}")
                 if print_stats and self.display_title:
                     description = self._build_broadcast_description(
                         self.display_title, print_stats
                     )
+                    logger.info(f"Built description, attempting update...")
                     if self._update_broadcast_description(description):
                         last_update = time.time()
-                        logger.debug("Broadcast description updated with fresh stats")
+                        logger.info(
+                            "Broadcast description updated successfully with fresh stats"
+                        )
+                    else:
+                        logger.warning("Failed to update broadcast description")
+                else:
+                    logger.warning(
+                        f"Missing data - print_stats: {bool(print_stats)}, display_title: {self.display_title}"
+                    )
             except Exception as e:
-                logger.error(f"Error updating description: {e}")
+                logger.error(f"Error in description update loop: {e}", exc_info=True)
 
     def start_streaming(self, webcam_url: str):
         if not self.stream_url:
@@ -916,8 +930,15 @@ class YouTubeStreamer:
 
     def start_description_updates(self, get_print_stats_callback):
         """Start periodic updates of broadcast description with live stats."""
+        logger.info(
+            f"start_description_updates called with callback: {get_print_stats_callback}"
+        )
         if not get_print_stats_callback:
+            logger.error("No callback provided for description updates")
             return
+        logger.info(
+            f"display_title: {self.display_title}, is_streaming: {self.is_streaming}"
+        )
         self._description_update_thread = threading.Thread(
             target=self._description_update_loop, args=(get_print_stats_callback,)
         )
