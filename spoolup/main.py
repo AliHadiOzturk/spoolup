@@ -22,6 +22,7 @@ import requests
 import urllib3
 import websocket
 import google.auth
+import httplib2
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -808,17 +809,10 @@ class SpoolUp:
                 logger.warning(
                     "SSL verification disabled - using unverified HTTPS context"
                 )
-                ssl_context = ssl.create_default_context()
-                ssl_context.check_hostname = False
-                ssl_context.verify_mode = ssl.CERT_NONE
-                # Also disable urllib3 warnings
-                urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-                # Build with custom SSL context via http instance
-                from google.auth.transport.urllib3 import AuthorizedHttp
-
-                http = AuthorizedHttp(
-                    creds, urllib3.PoolManager(ssl_context=ssl_context)
-                )
+                # Create httplib2.Http with SSL verification disabled
+                http = httplib2.Http(disable_ssl_certificate_validation=True)
+                # Authorize the HTTP instance with credentials
+                creds.apply(http.request)
                 self.youtube = build("youtube", "v3", http=http)
             else:
                 self.youtube = build("youtube", "v3", credentials=creds)
