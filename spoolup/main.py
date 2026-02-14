@@ -13,7 +13,7 @@ import argparse
 import subprocess
 import threading
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, Callable
 
 import requests
@@ -333,15 +333,15 @@ class YouTubeStreamer:
             logger.info(f"Live stream created: {stream_id}")
             logger.info(f"Stream URL: {self.stream_url}")
 
-            start_time = datetime.utcnow()
+            start_time = datetime.now(timezone.utc)
             end_time = start_time + timedelta(hours=24)
 
             broadcast_insert_data = {
                 "snippet": {
                     "title": f"3D Printing: {title}",
                     "description": f"Live stream of 3D print: {title}",
-                    "scheduledStartTime": start_time.isoformat() + "Z",
-                    "scheduledEndTime": end_time.isoformat() + "Z",
+                    "scheduledStartTime": start_time.isoformat(),
+                    "scheduledEndTime": end_time.isoformat(),
                 },
                 "status": {
                     "privacyStatus": self.config.get("video_privacy", "private"),
@@ -765,7 +765,7 @@ class SpoolUp:
             return False
 
     def on_print_started(self, filename: str):
-        self.print_start_time = datetime.now()
+        self.print_start_time = datetime.now(timezone.utc)
         logger.info(f"Print started at {self.print_start_time}")
 
         if self.config.get("enable_live_stream", True) and self.streamer:
