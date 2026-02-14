@@ -30,12 +30,14 @@ from googleapiclient.http import MediaFileUpload
 from googleapiclient.errors import HttpError
 
 # Optional import for SSL disable functionality
+_AuthHttpImportError = None
 try:
     from google.auth.transport.httplib2 import AuthorizedHttp
 
     HAS_AUTH_HTTP = True
-except ImportError:
+except ImportError as e:
     HAS_AUTH_HTTP = False
+    _AuthHttpImportError = str(e)
 
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.force-ssl",
@@ -817,6 +819,8 @@ class SpoolUp:
                     logger.error(
                         "disable_ssl_verify requires google-auth-httplib2 package"
                     )
+                    if _AuthHttpImportError:
+                        logger.error(f"Import error: {_AuthHttpImportError}")
                     logger.error("Install it with: pip install google-auth-httplib2")
                     return False
 
