@@ -31,12 +31,13 @@ SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
 ]
 
+_log_file = os.path.join(tempfile.gettempdir(), "spoolup.log")
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler("/tmp/spoolup.log"),
+        logging.FileHandler(_log_file),
     ],
 )
 logger = logging.getLogger(__name__)
@@ -46,7 +47,7 @@ class Config:
     DEFAULTS = {
         "moonraker_url": "http://localhost:7125",
         "webcam_url": "http://localhost:8080/?action=stream",
-        "timelapse_dir": "/home/user/printer_data/timelapse",
+        "timelapse_dir": os.path.join(tempfile.gettempdir(), "spoolup", "timelapse"),
         "client_secrets_file": "client_secrets.json",
         "token_file": "youtube_token.json",
         "stream_resolution": "1280x720",
