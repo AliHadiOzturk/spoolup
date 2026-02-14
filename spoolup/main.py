@@ -307,7 +307,7 @@ class YouTubeStreamer:
                     "scheduledEndTime": end_time.isoformat() + "Z",
                 },
                 "status": {
-                    "privacyStatus": self.config.get("stream_privacy", "unlisted"),
+                    "privacyStatus": self.config.get("video_privacy", "private"),
                     "selfDeclaredMadeForKids": False,
                 },
                 "contentDetails": {
