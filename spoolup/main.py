@@ -53,6 +53,7 @@ class Config:
         "stream_bitrate": "4000k",
         "youtube_category_id": "28",
         "video_privacy": "private",
+        "stream_privacy": "unlisted",
         "enable_live_stream": True,
         "enable_timelapse_upload": True,
         "retry_attempts": 3,
@@ -344,7 +345,7 @@ class YouTubeStreamer:
                     "scheduledEndTime": end_time.isoformat(),
                 },
                 "status": {
-                    "privacyStatus": self.config.get("video_privacy", "private"),
+                    "privacyStatus": self.config.get("stream_privacy", "unlisted"),
                     "selfDeclaredMadeForKids": False,
                 },
                 "contentDetails": {
