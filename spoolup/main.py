@@ -4,6 +4,12 @@ SpoolUp Runtime Module
 Main application for streaming 3D prints to YouTube
 """
 
+# SSL/TLS compatibility settings for corporate networks
+# Uncomment these lines if you encounter SSL errors:
+# os.environ['PYTHONHTTPSVERIFY'] = '0'
+# os.environ['SSL_CERT_FILE'] = ''
+# os.environ['SSL_CERT_DIR'] = ''
+
 import os
 import sys
 import json
@@ -828,7 +834,7 @@ class SpoolUp:
                     "SSL verification disabled - using unverified HTTPS context"
                 )
                 http = httplib2.Http(disable_ssl_certificate_validation=True)
-                authorized_http = google_auth_httplib2.AuthorizedHttp(creds, http=http)
+                authorized_http = google_auth_httplib2.AuthorizedHttp(creds, http=http)  # type: ignore
                 self.youtube = build("youtube", "v3", http=authorized_http)
             else:
                 self.youtube = build("youtube", "v3", credentials=creds)
