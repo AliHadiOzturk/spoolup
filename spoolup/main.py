@@ -306,6 +306,94 @@ class MoonrakerClient:
         if self.ws:
             self.ws.close()
 
+    def get_print_stats(self) -> Dict[str, Any]:
+        """Fetch comprehensive print statistics for broadcast description."""
+        stats = {}
+        try:
+            # Query multiple objects from Moonraker
+            response = requests.get(
+                f"{self.base_url}/printer/objects/query",
+                params={
+                    "print_stats": None,
+                    "virtual_sdcard": None,
+                    "toolhead": None,
+                },
+                timeout=10,
+            )
+            response.raise_for_status()
+            result = response.json().get("result", {})
+            status = result.get("status", {})
+
+            print_stats = status.get("print_stats", {})
+            virtual_sdcard = status.get("virtual_sdcard", {})
+            toolhead = status.get("toolhead", {})
+
+            # Calculate speed from toolhead
+            speed = toolhead.get("speed", 0)
+            stats["speed"] = f"{speed:.0f} mm/s" if speed else "N/A"
+
+            # Extract filament used (convert from mm to meters)
+            filament_mm = print_stats.get("filament_used", 0)
+            stats["filament_used"] = (
+                f"{filament_mm / 1000:.2f} m" if filament_mm else "N/A"
+            )
+
+            # Layer information
+            current_layer = virtual_sdcard.get("layer", "N/A")
+            total_layers = virtual_sdcard.get("layer_count", "N/A")
+            stats["current_layer"] = current_layer
+            stats["total_layers"] = total_layers
+
+            # Time calculations
+            print_duration = print_stats.get("print_duration", 0)
+            total_duration = print_stats.get("total_duration", 0)
+
+            # Format total time elapsed
+            if total_duration:
+                total_td = timedelta(seconds=int(total_duration))
+                hours, remainder = divmod(total_td.seconds, 3600)
+                minutes, seconds = divmod(remainder, 60)
+                stats["total_time"] = f"{hours}:{minutes:02d}:{seconds:02d}"
+            else:
+                stats["total_time"] = "N/A"
+
+            # Estimate remaining time
+            progress = virtual_sdcard.get("progress", 0)
+            if progress > 0 and print_duration > 0:
+                # Calculate total estimated time based on progress
+                estimated_total = print_duration / progress
+                remaining = estimated_total - print_duration
+                remaining_td = timedelta(seconds=int(remaining))
+                hours, remainder = divmod(remaining_td.seconds, 3600)
+                minutes, seconds = divmod(remainder, 60)
+                stats["estimate"] = f"{hours}:{minutes:02d}:{seconds:02d}"
+
+                # Calculate ETA
+                eta_time = datetime.now() + remaining_td
+                stats["eta"] = eta_time.strftime("%I:%M %p")
+            else:
+                stats["estimate"] = "Calculating..."
+                stats["eta"] = "Calculating..."
+
+            # Slicer estimate (use progress from virtual_sdcard to estimate)
+            if progress > 0 and print_duration > 0:
+                estimated_total = print_duration / progress
+                total_td = timedelta(seconds=int(estimated_total))
+                hours, remainder = divmod(total_td.seconds, 3600)
+                minutes, seconds = divmod(remainder, 60)
+                stats["slicer_time"] = f"{hours}:{minutes:02d}:{seconds:02d}"
+            else:
+                stats["slicer_time"] = "N/A"
+
+            # Flow rate (mm³/s) - approximate from speed and layer height
+            # This is a simplified calculation
+            stats["flow"] = "Calculating..."
+
+        except Exception as e:
+            logger.error(f"Failed to get print stats: {e}")
+
+        return stats
+
 
 class YouTubeStreamer:
     def __init__(self, config: Config, youtube_service):
@@ -316,7 +404,9 @@ class YouTubeStreamer:
         self.live_stream = None
         self.stream_url = None
         self.is_streaming = False
+        self.display_title: Optional[str] = None
         self._health_check_thread = None
+        self._description_update_thread = None
 
     def _check_ffmpeg_available(self) -> bool:
         """Check if FFmpeg is installed and available in PATH."""
@@ -346,10 +436,16 @@ class YouTubeStreamer:
     def _map_fps_to_youtube_format(self, fps: int) -> str:
         return "60fps" if fps >= 45 else "30fps"
 
-    def create_live_stream(self, title: str) -> bool:
+    def create_live_stream(
+        self, title: str, print_stats: Optional[Dict[str, Any]] = None
+    ) -> bool:
         try:
             if not title:
                 title = "3D Print"
+
+            # Clean up filename: remove .gcode extension and replace + with spaces
+            display_title = title.replace(".gcode", "").replace("+", " ")
+            self.display_title = display_title
 
             config_resolution: str = self.config.get("stream_resolution") or "1280x720"
             config_fps: int = self.config.get("stream_fps") or 30
@@ -361,7 +457,7 @@ class YouTubeStreamer:
 
             stream_insert_data = {
                 "snippet": {
-                    "title": f"Live Stream - {title}",
+                    "title": f"Live Stream - {display_title}",
                 },
                 "cdn": {
                     "ingestionType": "rtmp",
@@ -391,10 +487,13 @@ class YouTubeStreamer:
             start_time = datetime.now(timezone.utc)
             end_time = start_time + timedelta(hours=24)
 
+            # Build description with print statistics
+            description = self._build_broadcast_description(display_title, print_stats)
+
             broadcast_insert_data = {
                 "snippet": {
-                    "title": f"3D Printing: {title}",
-                    "description": f"Live stream of 3D print: {title}",
+                    "title": f"3D Printing: {display_title}",
+                    "description": description,
                     "scheduledStartTime": start_time.isoformat(),
                     "scheduledEndTime": end_time.isoformat(),
                 },
@@ -432,13 +531,63 @@ class YouTubeStreamer:
 
             logger.info("Stream bound to broadcast")
             return True
-
         except HttpError as e:
             logger.error(f"YouTube API error: {e}")
             return False
         except Exception as e:
             logger.error(f"Failed to create live stream: {e}")
             return False
+
+    def _build_broadcast_description(
+        self, display_title: str, print_stats: Optional[Dict[str, Any]]
+    ) -> str:
+        """Build broadcast description with print statistics."""
+        lines = [
+            f"Live stream of 3D print: {display_title}",
+            "",
+            "📊 Print Statistics",
+            "━" * 40,
+        ]
+
+        if print_stats:
+            # Extract statistics
+            speed = print_stats.get("speed", "N/A")
+            flow = print_stats.get("flow", "N/A")
+            filament = print_stats.get("filament_used", "N/A")
+            current_layer = print_stats.get("current_layer", "N/A")
+            total_layers = print_stats.get("total_layers", "N/A")
+            estimate = print_stats.get("estimate", "N/A")
+            slicer_time = print_stats.get("slicer_time", "N/A")
+            total_time = print_stats.get("total_time", "N/A")
+            eta = print_stats.get("eta", "N/A")
+
+            # Format statistics in a table-like layout
+            lines.extend(
+                [
+                    f"Speed:        {speed}",
+                    f"Flow:         {flow}",
+                    f"Filament:     {filament}",
+                    f"Layer:        {current_layer} of {total_layers}",
+                    "",
+                    f"Estimate:     {estimate}",
+                    f"Slicer:       {slicer_time}",
+                    f"Total:        {total_time}",
+                    f"ETA:          {eta}",
+                ]
+            )
+        else:
+            lines.append("Statistics will be updated as the print progresses...")
+
+        lines.extend(
+            [
+                "",
+                "━" * 40,
+                "🔴 Live from Klipper 3D Printer",
+                f"⏱️  Started at: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}",
+            ]
+        )
+
+        return "\n".join(lines)
 
     def _wait_for_stream_active(self, stream_id: str, timeout: int = 30) -> bool:
         """Wait for the stream to become active (receiving data from FFmpeg)."""
@@ -519,36 +668,75 @@ class YouTubeStreamer:
             logger.error(f"Failed to transition broadcast: {e}")
             return False
 
-    def _check_stream_health(self) -> bool:
+    def _check_stream_health(self) -> tuple[bool, str]:
+        """Check stream health status.
+
+        Returns:
+            Tuple of (is_healthy, status_message)
+        """
         try:
             if not self.live_stream:
-                return False
+                return False, "No live stream"
             stream = (
                 self.youtube.liveStreams()
                 .list(part="status", id=self.live_stream["id"])
                 .execute()
             )
             if not stream.get("items"):
-                return False
+                return False, "Stream not found"
             status = stream["items"][0]["status"]
             stream_status = status.get("streamStatus")
             health = status.get("healthStatus", {}).get("status")
+
             if stream_status == "error":
-                return False
+                return False, f"Stream error state"
             if health == "bad":
-                return False
-            return True
+                return False, f"Bad health status"
+            return True, f"Status: {stream_status}, Health: {health}"
         except Exception as e:
-            logger.error(f"Health check error: {e}")
-            return False
+            return False, f"Health check error: {e}"
 
     def _health_check_loop(self):
+        """Monitor stream health with tolerance for initial startup.
+
+        Allows up to 3 consecutive failures during the first 5 minutes,
+        then requires consistent good health.
+        """
+        consecutive_failures = 0
+        stream_start_time = time.time()
+        startup_grace_period = 300  # 5 minutes
+
         while self.is_streaming:
             time.sleep(30)
             if not self.is_streaming:
                 break
-            if not self._check_stream_health():
-                logger.error("Stream health check failed, stopping stream")
+
+            is_healthy, message = self._check_stream_health()
+
+            if is_healthy:
+                consecutive_failures = 0
+                logger.debug(f"Stream health check passed: {message}")
+            else:
+                consecutive_failures += 1
+                elapsed = time.time() - stream_start_time
+
+                # During startup grace period, allow up to 3 failures
+                if elapsed < startup_grace_period:
+                    if consecutive_failures <= 3:
+                        logger.warning(
+                            f"Stream health check failed ({consecutive_failures}/3): {message}. "
+                            f"Within grace period ({elapsed:.0f}s), continuing..."
+                        )
+                        continue
+                    else:
+                        logger.error(
+                            f"Stream health check failed {consecutive_failures} times within grace period. Stopping."
+                        )
+                else:
+                    logger.error(
+                        f"Stream health check failed: {message}. Stopping stream."
+                    )
+
                 self.stop_streaming()
                 break
 
@@ -556,6 +744,49 @@ class YouTubeStreamer:
         self._health_check_thread = threading.Thread(target=self._health_check_loop)
         self._health_check_thread.daemon = True
         self._health_check_thread.start()
+
+    def _update_broadcast_description(self, description: str) -> bool:
+        """Update the live broadcast description."""
+        try:
+            if not self.live_broadcast:
+                return False
+            broadcast_id = self.live_broadcast["id"]
+            self.youtube.liveBroadcasts().update(
+                part="snippet",
+                body={
+                    "id": broadcast_id,
+                    "snippet": {
+                        "description": description,
+                    },
+                },
+            ).execute()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to update broadcast description: {e}")
+            return False
+
+    def _description_update_loop(self, get_print_stats_callback):
+        """Periodically update broadcast description with fresh statistics."""
+        update_interval = 15
+        last_update = 0
+        while self.is_streaming:
+            time.sleep(1)
+            if not self.is_streaming:
+                break
+            elapsed = time.time() - last_update
+            if elapsed < update_interval:
+                continue
+            try:
+                print_stats = get_print_stats_callback()
+                if print_stats and self.display_title:
+                    description = self._build_broadcast_description(
+                        self.display_title, print_stats
+                    )
+                    if self._update_broadcast_description(description):
+                        last_update = time.time()
+                        logger.debug("Broadcast description updated with fresh stats")
+            except Exception as e:
+                logger.error(f"Error updating description: {e}")
 
     def start_streaming(self, webcam_url: str):
         if not self.stream_url:
@@ -682,6 +913,17 @@ class YouTubeStreamer:
         except Exception as e:
             logger.error(f"Failed to start streaming: {e}")
             return False
+
+    def start_description_updates(self, get_print_stats_callback):
+        """Start periodic updates of broadcast description with live stats."""
+        if not get_print_stats_callback:
+            return
+        self._description_update_thread = threading.Thread(
+            target=self._description_update_loop, args=(get_print_stats_callback,)
+        )
+        self._description_update_thread.daemon = True
+        self._description_update_thread.start()
+        logger.info("Started broadcast description updates (15s interval)")
 
     def stop_streaming(self):
         try:
@@ -871,7 +1113,13 @@ class SpoolUp:
         logger.info(f"Print started at {self.print_start_time}")
 
         if self.config.get("enable_live_stream", True) and self.streamer:
-            if self.streamer.create_live_stream(filename):
+            # Fetch print statistics for broadcast description
+            print_stats = {}
+            if self.moonraker:
+                print_stats = self.moonraker.get_print_stats()
+                logger.info(f"Fetched print stats: {print_stats}")
+
+            if self.streamer.create_live_stream(filename, print_stats):
                 webcam_url: str = (
                     self.config.get("webcam_url")
                     or "http://localhost:8080/?action=stream"
@@ -881,6 +1129,11 @@ class SpoolUp:
                     if watch_url:
                         logger.info(f"Live stream URL: {watch_url}")
                         self._send_notification(f"Live stream started: {watch_url}")
+                    # Start periodic description updates with live stats
+                    if self.moonraker:
+                        self.streamer.start_description_updates(
+                            self.moonraker.get_print_stats
+                        )
 
     def on_print_completed(self, filename: str):
         logger.info("Print completed")
