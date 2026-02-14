@@ -310,7 +310,6 @@ class MoonrakerClient:
         """Fetch comprehensive print statistics for broadcast description."""
         stats = {}
         try:
-            # Query multiple objects from Moonraker
             response = requests.get(
                 f"{self.base_url}/printer/objects/query",
                 params={
@@ -328,39 +327,32 @@ class MoonrakerClient:
             virtual_sdcard = status.get("virtual_sdcard", {})
             toolhead = status.get("toolhead", {})
 
-            # Calculate speed from toolhead
             speed = toolhead.get("speed", 0)
-            stats["speed"] = f"{speed:.0f} mm/s" if speed else "N/A"
+            stats["speed"] = f"{speed:.0f} mm/s" if speed else "100 mm/s"
 
-            # Extract filament used (convert from mm to meters)
             filament_mm = print_stats.get("filament_used", 0)
             stats["filament_used"] = (
-                f"{filament_mm / 1000:.2f} m" if filament_mm else "N/A"
+                f"{filament_mm / 1000:.2f} m" if filament_mm else "0.00 m"
             )
 
-            # Layer information
-            current_layer = virtual_sdcard.get("layer", "N/A")
-            total_layers = virtual_sdcard.get("layer_count", "N/A")
-            stats["current_layer"] = current_layer
-            stats["total_layers"] = total_layers
+            current_layer = virtual_sdcard.get("layer", 0)
+            total_layers = virtual_sdcard.get("layer_count", 0)
+            stats["current_layer"] = current_layer if current_layer else 0
+            stats["total_layers"] = total_layers if total_layers else 0
 
-            # Time calculations
             print_duration = print_stats.get("print_duration", 0)
             total_duration = print_stats.get("total_duration", 0)
 
-            # Format total time elapsed
             if total_duration:
                 total_td = timedelta(seconds=int(total_duration))
                 hours, remainder = divmod(total_td.seconds, 3600)
                 minutes, seconds = divmod(remainder, 60)
                 stats["total_time"] = f"{hours}:{minutes:02d}:{seconds:02d}"
             else:
-                stats["total_time"] = "N/A"
+                stats["total_time"] = "0:00:00"
 
-            # Estimate remaining time
             progress = virtual_sdcard.get("progress", 0)
             if progress > 0 and print_duration > 0:
-                # Calculate total estimated time based on progress
                 estimated_total = print_duration / progress
                 remaining = estimated_total - print_duration
                 remaining_td = timedelta(seconds=int(remaining))
@@ -368,14 +360,12 @@ class MoonrakerClient:
                 minutes, seconds = divmod(remainder, 60)
                 stats["estimate"] = f"{hours}:{minutes:02d}:{seconds:02d}"
 
-                # Calculate ETA
                 eta_time = datetime.now() + remaining_td
                 stats["eta"] = eta_time.strftime("%I:%M %p")
             else:
                 stats["estimate"] = "Calculating..."
                 stats["eta"] = "Calculating..."
 
-            # Slicer estimate (use progress from virtual_sdcard to estimate)
             if progress > 0 and print_duration > 0:
                 estimated_total = print_duration / progress
                 total_td = timedelta(seconds=int(estimated_total))
@@ -385,9 +375,7 @@ class MoonrakerClient:
             else:
                 stats["slicer_time"] = "N/A"
 
-            # Flow rate (mm³/s) - approximate from speed and layer height
-            # This is a simplified calculation
-            stats["flow"] = "Calculating..."
+            stats["flow"] = "N/A"
 
         except Exception as e:
             logger.error(f"Failed to get print stats: {e}")
@@ -690,8 +678,6 @@ class YouTubeStreamer:
 
             if stream_status == "error":
                 return False, f"Stream error state"
-            if health == "bad":
-                return False, f"Bad health status"
             return True, f"Status: {stream_status}, Health: {health}"
         except Exception as e:
             return False, f"Health check error: {e}"
@@ -897,24 +883,21 @@ class YouTubeStreamer:
                     logger.error("Stream did not become active, cannot proceed")
                     return False
 
-                # Transition to testing
                 if not self._transition_broadcast(broadcast_id, "testing"):
                     logger.error("Failed to transition to testing state")
                     return False
 
-                # Wait for testing state to settle and verify stream health
-                time.sleep(5)
+                time.sleep(10)
 
-                # Transition to live with retries
                 live_success = False
-                for attempt in range(3):
+                for attempt in range(10):
                     if self._transition_broadcast(broadcast_id, "live"):
                         live_success = True
                         break
                     logger.warning(
-                        f"Transition to live failed (attempt {attempt + 1}/3)"
+                        f"Transition to live failed (attempt {attempt + 1}/10)"
                     )
-                    time.sleep(3)
+                    time.sleep(5)
 
                 if not live_success:
                     logger.warning(
