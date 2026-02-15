@@ -929,12 +929,43 @@ class YouTubeStreamer:
 
             self.is_streaming = True
             self._start_health_monitor()
+            self._start_ffmpeg_monitor()
             logger.info("Live streaming started")
             return True
 
         except Exception as e:
             logger.error(f"Failed to start streaming: {e}")
             return False
+
+    def _ffmpeg_monitor_loop(self):
+        """Monitor FFmpeg process and log if it dies unexpectedly."""
+        logger.info("FFmpeg monitor started")
+        while self.is_streaming:
+            time.sleep(5)
+            if not self.is_streaming:
+                break
+            if self.ffmpeg_process and self.ffmpeg_process.poll() is not None:
+                exit_code = self.ffmpeg_process.poll()
+                logger.error(
+                    f"FFmpeg process died unexpectedly with exit code: {exit_code}"
+                )
+                if self.ffmpeg_process.stderr:
+                    try:
+                        stderr_output = self.ffmpeg_process.stderr.read()
+                        if stderr_output:
+                            logger.error(
+                                f"FFmpeg stderr: {stderr_output[-1000:]}"
+                            )  # Last 1000 chars
+                    except:
+                        pass
+                self.is_streaming = False
+                break
+        logger.info("FFmpeg monitor stopped")
+
+    def _start_ffmpeg_monitor(self):
+        self._ffmpeg_monitor_thread = threading.Thread(target=self._ffmpeg_monitor_loop)
+        self._ffmpeg_monitor_thread.daemon = True
+        self._ffmpeg_monitor_thread.start()
 
     def start_description_updates(self, get_print_stats_callback):
         """Start periodic updates of broadcast description with live stats."""
@@ -955,6 +986,9 @@ class YouTubeStreamer:
         logger.info("Started broadcast description updates (15s interval)")
 
     def stop_streaming(self):
+        import traceback
+
+        logger.warning(f"stop_streaming() called from:\n{traceback.format_stack()[-3]}")
         try:
             if self.live_broadcast:
                 self._transition_broadcast(self.live_broadcast["id"], "complete")
