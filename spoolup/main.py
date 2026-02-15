@@ -1409,13 +1409,20 @@ This timelapse was automatically generated using Moonraker Timelapse plugin and 
 
         if effective_state == "printing":
             filename = (
-                print_status.get("filename") or self.moonraker.current_file or "Unknown"
+                self.moonraker.current_file
+                or print_status.get("filename")
+                or "3D Print"
             )
             logger.info(f"Print already in progress: {filename}")
-            self.moonraker.print_state = "printing"
-            self.moonraker.current_file = filename
-            self.moonraker._initial_state_handled = True
-            self.on_print_started(filename)
+            if self.moonraker._initial_state_handled:
+                logger.info(
+                    "WebSocket already handled print start, skipping HTTP API trigger"
+                )
+            else:
+                self.moonraker.print_state = "printing"
+                self.moonraker.current_file = filename
+                self.moonraker._initial_state_handled = True
+                self.on_print_started(filename)
         elif effective_state and effective_state != "unknown":
             logger.info(f"Print not active, current state: {effective_state}")
             self.moonraker.print_state = effective_state
