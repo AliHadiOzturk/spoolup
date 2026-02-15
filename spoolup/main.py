@@ -311,7 +311,7 @@ class MoonrakerClient:
         stats = {}
         try:
             response = requests.get(
-                f"{self.base_url}/printer/objects/query",
+                f"{self.base_url}/printer/objects/query?print_stats&virtual_sdcard&toolhea",
                 params={
                     "print_stats": None,
                     "virtual_sdcard": None,
