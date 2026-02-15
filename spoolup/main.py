@@ -1140,6 +1140,10 @@ class SpoolUp:
                 print_stats = self.moonraker.get_print_stats()
                 logger.info(f"Fetched print stats: {print_stats}")
 
+            if self.streamer.is_streaming:
+                logger.info("Stream already active, skipping duplicate creation")
+                return
+
             if self.streamer.create_live_stream(filename, print_stats):
                 webcam_url: str = (
                     self.config.get("webcam_url")
@@ -1152,9 +1156,11 @@ class SpoolUp:
                         self._send_notification(f"Live stream started: {watch_url}")
                     # Start periodic description updates with live stats
                     if self.moonraker:
+                        logger.info("About to start description updates...")
                         self.streamer.start_description_updates(
                             self.moonraker.get_print_stats
                         )
+                        logger.info("Description updates initiated")
 
     def on_print_completed(self, filename: str):
         logger.info("Print completed")
