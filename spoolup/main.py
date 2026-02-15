@@ -434,6 +434,7 @@ class YouTubeStreamer:
             # Clean up filename: remove .gcode extension and replace + with spaces
             display_title = title.replace(".gcode", "").replace("+", " ")
             self.display_title = display_title
+            logger.info(f"Creating stream with display_title: {display_title}")
 
             config_resolution: str = self.config.get("stream_resolution") or "1280x720"
             config_fps: int = self.config.get("stream_fps") or 30
@@ -478,9 +479,12 @@ class YouTubeStreamer:
             # Build description with print statistics
             description = self._build_broadcast_description(display_title, print_stats)
 
+            broadcast_title = f"3D Printing: {display_title}"
+            logger.info(f"Broadcast title will be: {broadcast_title}")
+
             broadcast_insert_data = {
                 "snippet": {
-                    "title": f"3D Printing: {display_title}",
+                    "title": broadcast_title,
                     "description": description,
                     "scheduledStartTime": start_time.isoformat(),
                     "scheduledEndTime": end_time.isoformat(),
