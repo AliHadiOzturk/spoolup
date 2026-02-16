@@ -669,66 +669,80 @@ class YouTubeStreamer:
         try:
             if not self.live_stream:
                 return False, "No live stream"
+            logger.info(f"Checking stream health for {self.live_stream['id']}...")
             stream = (
                 self.youtube.liveStreams()
                 .list(part="status", id=self.live_stream["id"])
                 .execute()
             )
             if not stream.get("items"):
+                logger.warning("Stream not found in health check")
                 return False, "Stream not found"
             status = stream["items"][0]["status"]
             stream_status = status.get("streamStatus")
             health = status.get("healthStatus", {}).get("status")
 
+            logger.info(f"Stream status: {stream_status}, Health: {health}")
+
             if stream_status == "error":
+                logger.error("Stream is in error state")
                 return False, f"Stream error state"
+            if stream_status == "inactive":
+                logger.warning("Stream is inactive")
+                return False, "Stream inactive"
             return True, f"Status: {stream_status}, Health: {health}"
         except Exception as e:
+            logger.error(f"Health check error: {e}", exc_info=True)
             return False, f"Health check error: {e}"
 
     def _health_check_loop(self):
-        """Monitor stream health with tolerance for initial startup.
-
-        Allows up to 3 consecutive failures during the first 5 minutes,
-        then requires consistent good health.
-        """
         consecutive_failures = 0
         stream_start_time = time.time()
-        startup_grace_period = 300  # 5 minutes
+        startup_grace_period = 300
+        check_count = 0
 
+        logger.info("Health check loop started")
         while self.is_streaming:
             time.sleep(30)
             if not self.is_streaming:
+                logger.info("Health check loop exiting - is_streaming is False")
                 break
+
+            check_count += 1
+            elapsed = time.time() - stream_start_time
+            logger.info(f"Health check #{check_count} after {elapsed:.0f}s")
 
             is_healthy, message = self._check_stream_health()
 
             if is_healthy:
                 consecutive_failures = 0
-                logger.debug(f"Stream health check passed: {message}")
+                logger.info(f"Health check passed: {message}")
             else:
                 consecutive_failures += 1
-                elapsed = time.time() - stream_start_time
+                logger.warning(
+                    f"Health check failed ({consecutive_failures} failures): {message}"
+                )
 
-                # During startup grace period, allow up to 3 failures
                 if elapsed < startup_grace_period:
                     if consecutive_failures <= 3:
-                        logger.warning(
-                            f"Stream health check failed ({consecutive_failures}/3): {message}. "
-                            f"Within grace period ({elapsed:.0f}s), continuing..."
+                        logger.info(
+                            f"Within grace period ({elapsed:.0f}s < {startup_grace_period}s), continuing..."
                         )
                         continue
                     else:
                         logger.error(
-                            f"Stream health check failed {consecutive_failures} times within grace period. Stopping."
+                            f"TOO MANY FAILURES in grace period: {consecutive_failures}"
                         )
                 else:
                     logger.error(
-                        f"Stream health check failed: {message}. Stopping stream."
+                        f"Grace period over ({elapsed:.0f}s > {startup_grace_period}s), stopping"
                     )
 
+                logger.error("STOPPING STREAM DUE TO HEALTH CHECK FAILURES")
                 self.stop_streaming()
                 break
+
+        logger.info("Health check loop ended")
 
     def _start_health_monitor(self):
         self._health_check_thread = threading.Thread(target=self._health_check_loop)
