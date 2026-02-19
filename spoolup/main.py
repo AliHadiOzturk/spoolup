@@ -129,32 +129,69 @@ class MoonrakerClient:
         self._initial_state_handled = False
         self._subscription_msg_id: Optional[int] = None
         self._subscription_pending = False
+        self._ws_thread: Optional[threading.Thread] = None
+        self._reconnect_delay = 1.0
+        self._max_reconnect_delay = 60.0
+        self._shutdown = False
+        self._last_ping_time = 0.0
+        self._ping_interval = 30.0
 
     def connect_websocket(self):
         try:
+            if self._shutdown:
+                logger.debug("WebSocket shutdown requested, not connecting")
+                return False
+
             self.ws = websocket.WebSocketApp(
                 self.ws_url,
                 on_open=self._on_open,
                 on_message=self._on_message,
                 on_error=self._on_error,
                 on_close=self._on_close,
+                on_ping=self._on_ping,
+                on_pong=self._on_pong,
             )
             logger.info(f"Connecting to Moonraker WebSocket at {self.ws_url}")
 
-            ws_thread = threading.Thread(target=self.ws.run_forever)
-            ws_thread.daemon = True
-            ws_thread.start()
+            self._ws_thread = threading.Thread(target=self._run_websocket_forever)
+            self._ws_thread.daemon = True
+            self._ws_thread.start()
 
             timeout = 10
             start = time.time()
             while not self.connected and time.time() - start < timeout:
                 time.sleep(0.1)
 
+            if self.connected:
+                self._reconnect_delay = 1.0
+                logger.info("WebSocket connected successfully")
+
             return self.connected
 
         except Exception as e:
             logger.error(f"WebSocket connection error: {e}")
             return False
+
+    def _run_websocket_forever(self):
+        if not self.ws:
+            return
+        try:
+            self.ws.run_forever(
+                ping_interval=self._ping_interval,
+                ping_payload="keepalive",
+            )
+        except Exception as e:
+            logger.error(f"WebSocket run_forever error: {e}")
+        finally:
+            if not self._shutdown:
+                logger.warning("WebSocket connection ended, will attempt reconnect")
+
+    def _on_ping(self, ws, message):
+        logger.debug(f"WebSocket ping received: {message}")
+
+    def _on_pong(self, ws, message):
+        self._last_ping_time = time.time()
+        logger.debug(f"WebSocket pong received: {message}")
 
     def _on_open(self, ws):
         logger.info("Moonraker WebSocket connected")
@@ -203,8 +240,17 @@ class MoonrakerClient:
         self.connected = False
 
     def _on_close(self, ws, close_status_code, close_msg):
-        logger.info("Moonraker WebSocket disconnected")
+        was_connected = self.connected
         self.connected = False
+        self._subscription_pending = False
+        self._subscription_msg_id = None
+
+        if was_connected:
+            logger.warning(
+                f"Moonraker WebSocket disconnected (code: {close_status_code}, msg: {close_msg})"
+            )
+        else:
+            logger.debug(f"WebSocket connection closed (code: {close_status_code})")
 
     def _send_jsonrpc(self, method: str, params: Optional[dict] = None) -> int:
         self.message_id += 1
@@ -302,9 +348,40 @@ class MoonrakerClient:
             logger.error(f"Failed to get print status: {e}")
             return {}
 
+    def start_reconnection_loop(self):
+        def reconnect_loop():
+            logger.info("WebSocket reconnection loop started")
+            while not self._shutdown:
+                if not self.connected:
+                    logger.info(
+                        f"Attempting WebSocket reconnect (delay: {self._reconnect_delay:.1f}s)"
+                    )
+                    if self.connect_websocket():
+                        logger.info("WebSocket reconnected successfully")
+                        self._reconnect_delay = 1.0
+                    else:
+                        self._reconnect_delay = min(
+                            self._reconnect_delay * 1.5, self._max_reconnect_delay
+                        )
+                        logger.warning(
+                            f"Reconnect failed, next attempt in {self._reconnect_delay:.1f}s"
+                        )
+                time.sleep(1)
+            logger.info("WebSocket reconnection loop stopped")
+
+        reconnect_thread = threading.Thread(target=reconnect_loop)
+        reconnect_thread.daemon = True
+        reconnect_thread.start()
+        return reconnect_thread
+
     def disconnect(self):
+        self._shutdown = True
         if self.ws:
-            self.ws.close()
+            try:
+                self.ws.close()
+            except Exception as e:
+                logger.debug(f"Error closing WebSocket: {e}")
+        self.connected = False
 
     def get_print_stats(self) -> Dict[str, Any]:
         """Fetch comprehensive print statistics for broadcast description."""
@@ -499,7 +576,7 @@ class YouTubeStreamer:
                         "broadcastStreamDelayMs": 0,
                     },
                     "enableAutoStart": False,
-                    "enableAutoStop": True,
+                    "enableAutoStop": False,
                 },
             }
 
@@ -698,7 +775,7 @@ class YouTubeStreamer:
     def _health_check_loop(self):
         consecutive_failures = 0
         stream_start_time = time.time()
-        startup_grace_period = 300
+        startup_grace_period = 600
         check_count = 0
 
         logger.info("Health check loop started")
@@ -715,6 +792,10 @@ class YouTubeStreamer:
             is_healthy, message = self._check_stream_health()
 
             if is_healthy:
+                if consecutive_failures > 0:
+                    logger.info(
+                        f"Health check recovered after {consecutive_failures} failures"
+                    )
                 consecutive_failures = 0
                 logger.info(f"Health check passed: {message}")
             else:
@@ -723,19 +804,24 @@ class YouTubeStreamer:
                     f"Health check failed ({consecutive_failures} failures): {message}"
                 )
 
+                max_failures_during_grace = 12
+                max_failures_after_grace = 6
+
                 if elapsed < startup_grace_period:
-                    if consecutive_failures <= 3:
-                        logger.info(
-                            f"Within grace period ({elapsed:.0f}s < {startup_grace_period}s), continuing..."
-                        )
-                        continue
-                    else:
-                        logger.error(
-                            f"TOO MANY FAILURES in grace period: {consecutive_failures}"
-                        )
+                    max_allowed = max_failures_during_grace
+                    period = "grace period"
+                else:
+                    max_allowed = max_failures_after_grace
+                    period = "after grace period"
+
+                if consecutive_failures < max_allowed:
+                    logger.info(
+                        f"Within {period} ({consecutive_failures}/{max_allowed} failures), continuing..."
+                    )
+                    continue
                 else:
                     logger.error(
-                        f"Grace period over ({elapsed:.0f}s > {startup_grace_period}s), stopping"
+                        f"TOO MANY FAILURES {period}: {consecutive_failures} >= {max_allowed}"
                     )
 
                 logger.error("STOPPING STREAM DUE TO HEALTH CHECK FAILURES")
@@ -895,29 +981,30 @@ class YouTubeStreamer:
 
             self.ffmpeg_process = subprocess.Popen(
                 cmd,
-                stdout=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
                 bufsize=1,
                 universal_newlines=True,
             )
 
-            time.sleep(3)
+            self._start_ffmpeg_stderr_logger()
+
+            time.sleep(5)
             if self.ffmpeg_process.poll() is not None:
-                if self.ffmpeg_process.stderr:
-                    stderr = self.ffmpeg_process.stderr.read()
-                    logger.error(f"FFmpeg failed to start: {stderr}")
-                else:
-                    logger.error("FFmpeg failed to start")
+                logger.error("FFmpeg failed to start (process exited)")
                 return False
 
             if self.live_stream and self.live_broadcast:
                 stream_id = self.live_stream["id"]
                 broadcast_id = self.live_broadcast["id"]
 
-                # Wait for stream to become active (receiving data)
-                if not self._wait_for_stream_active(stream_id, timeout=30):
-                    logger.error("Stream did not become active, cannot proceed")
-                    return False
+                if not self._wait_for_stream_active(stream_id, timeout=60):
+                    logger.warning(
+                        "Stream did not become active within 60s, continuing anyway"
+                    )
+                    logger.info(
+                        "Stream may still become active - health check will monitor"
+                    )
 
                 if not self._transition_broadcast(broadcast_id, "testing"):
                     logger.error("Failed to transition to testing state")
@@ -980,6 +1067,29 @@ class YouTubeStreamer:
         self._ffmpeg_monitor_thread = threading.Thread(target=self._ffmpeg_monitor_loop)
         self._ffmpeg_monitor_thread.daemon = True
         self._ffmpeg_monitor_thread.start()
+
+    def _start_ffmpeg_stderr_logger(self):
+        def log_stderr():
+            if not self.ffmpeg_process or not self.ffmpeg_process.stderr:
+                return
+            try:
+                for line in iter(self.ffmpeg_process.stderr.readline, ""):
+                    if not line:
+                        break
+                    line = line.strip()
+                    if line:
+                        if "error" in line.lower() or "failed" in line.lower():
+                            logger.error(f"FFmpeg: {line}")
+                        elif "warning" in line.lower():
+                            logger.warning(f"FFmpeg: {line}")
+                        else:
+                            logger.debug(f"FFmpeg: {line}")
+            except Exception as e:
+                logger.debug(f"FFmpeg stderr logger exited: {e}")
+
+        stderr_thread = threading.Thread(target=log_stderr)
+        stderr_thread.daemon = True
+        stderr_thread.start()
 
     def start_description_updates(self, get_print_stats_callback):
         """Start periodic updates of broadcast description with live stats."""
@@ -1475,13 +1585,10 @@ This timelapse was automatically generated using Moonraker Timelapse plugin and 
             logger.info(f"Print not active, current state: {effective_state}")
             self.moonraker.print_state = effective_state
 
+        reconnect_thread = self.moonraker.start_reconnection_loop()
+
         try:
             while True:
-                if not self.moonraker.connected:
-                    logger.warning("WebSocket disconnected. Reconnecting...")
-                    if not self.moonraker.connect_websocket():
-                        time.sleep(5)
-                        continue
                 time.sleep(1)
         except KeyboardInterrupt:
             logger.info("Shutting down...")
