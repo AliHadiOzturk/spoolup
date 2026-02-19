@@ -737,15 +737,10 @@ class YouTubeStreamer:
             logger.error(f"Failed to transition broadcast: {e}")
             return False
 
-    def _check_stream_health(self) -> tuple[bool, str]:
-        """Check stream health status.
-
-        Returns:
-            Tuple of (is_healthy, status_message)
-        """
+    def _check_stream_health(self) -> tuple[bool, str, dict]:
         try:
             if not self.live_stream:
-                return False, "No live stream"
+                return False, "No live stream", {}
             logger.info(f"Checking stream health for {self.live_stream['id']}...")
             stream = (
                 self.youtube.liveStreams()
@@ -754,26 +749,50 @@ class YouTubeStreamer:
             )
             if not stream.get("items"):
                 logger.warning("Stream not found in health check")
-                return False, "Stream not found"
+                return False, "Stream not found", {}
             status = stream["items"][0]["status"]
             stream_status = status.get("streamStatus")
-            health = status.get("healthStatus", {}).get("status")
+            health_status = status.get("healthStatus", {})
+            health = health_status.get("status")
+            reasons = health_status.get("configurationIssues", [])
 
             logger.info(f"Stream status: {stream_status}, Health: {health}")
+            if reasons:
+                for reason in reasons:
+                    logger.warning(f"Health issue: {reason}")
 
             if stream_status == "error":
                 logger.error("Stream is in error state")
-                return False, f"Stream error state"
+                return (
+                    False,
+                    f"Stream error state",
+                    {"status": stream_status, "health": health, "reasons": reasons},
+                )
             if stream_status == "inactive":
                 logger.warning("Stream is inactive")
-                return False, "Stream inactive"
-            return True, f"Status: {stream_status}, Health: {health}"
+                return (
+                    False,
+                    "Stream inactive",
+                    {"status": stream_status, "health": health, "reasons": reasons},
+                )
+            if health == "bad":
+                return (
+                    False,
+                    f"Health is bad",
+                    {"status": stream_status, "health": health, "reasons": reasons},
+                )
+            return (
+                True,
+                f"Status: {stream_status}, Health: {health}",
+                {"status": stream_status, "health": health, "reasons": reasons},
+            )
         except Exception as e:
             logger.error(f"Health check error: {e}", exc_info=True)
-            return False, f"Health check error: {e}"
+            return False, f"Health check error: {e}", {}
 
     def _health_check_loop(self):
         consecutive_failures = 0
+        consecutive_bad_health = 0
         stream_start_time = time.time()
         startup_grace_period = 600
         check_count = 0
@@ -789,20 +808,32 @@ class YouTubeStreamer:
             elapsed = time.time() - stream_start_time
             logger.info(f"Health check #{check_count} after {elapsed:.0f}s")
 
-            is_healthy, message = self._check_stream_health()
+            is_healthy, message, details = self._check_stream_health()
 
             if is_healthy:
-                if consecutive_failures > 0:
+                if consecutive_failures > 0 or consecutive_bad_health > 0:
                     logger.info(
-                        f"Health check recovered after {consecutive_failures} failures"
+                        f"Health check recovered after {consecutive_failures} failures and {consecutive_bad_health} bad health"
                     )
                 consecutive_failures = 0
+                consecutive_bad_health = 0
                 logger.info(f"Health check passed: {message}")
             else:
-                consecutive_failures += 1
-                logger.warning(
-                    f"Health check failed ({consecutive_failures} failures): {message}"
-                )
+                health = details.get("health", "unknown")
+                if health == "bad":
+                    consecutive_bad_health += 1
+                    logger.warning(
+                        f"Health is bad ({consecutive_bad_health} consecutive): {message}"
+                    )
+                    if consecutive_bad_health >= 3:
+                        logger.error(
+                            f"Stream health has been bad for {consecutive_bad_health * 30}s - likely causing viewer freezes"
+                        )
+                else:
+                    consecutive_failures += 1
+                    logger.warning(
+                        f"Health check failed ({consecutive_failures} failures): {message}"
+                    )
 
                 max_failures_during_grace = 12
                 max_failures_after_grace = 6
@@ -814,14 +845,15 @@ class YouTubeStreamer:
                     max_allowed = max_failures_after_grace
                     period = "after grace period"
 
-                if consecutive_failures < max_allowed:
+                total_failures = consecutive_failures + consecutive_bad_health
+                if total_failures < max_allowed:
                     logger.info(
-                        f"Within {period} ({consecutive_failures}/{max_allowed} failures), continuing..."
+                        f"Within {period} ({total_failures}/{max_allowed} failures), continuing..."
                     )
                     continue
                 else:
                     logger.error(
-                        f"TOO MANY FAILURES {period}: {consecutive_failures} >= {max_allowed}"
+                        f"TOO MANY FAILURES {period}: {total_failures} >= {max_allowed}"
                     )
 
                 logger.error("STOPPING STREAM DUE TO HEALTH CHECK FAILURES")
@@ -930,11 +962,15 @@ class YouTubeStreamer:
 
             cmd = [
                 "ffmpeg",
-                "-re",
+                "-hide_banner",
+                "-loglevel",
+                "warning",
                 "-thread_queue_size",
-                "1024",
+                "4096",
                 "-f",
                 "mjpeg",
+                "-use_wallclock_as_timestamps",
+                "1",
                 "-i",
                 webcam_url,
                 "-f",
@@ -945,24 +981,28 @@ class YouTubeStreamer:
                 "libx264",
                 "-preset",
                 "ultrafast",
-                "-threads",
-                "4",
                 "-tune",
                 "zerolatency",
+                "-profile:v",
+                "baseline",
+                "-level",
+                "3.0",
                 "-b:v",
                 bitrate,
                 "-maxrate",
                 bitrate,
                 "-bufsize",
-                "1500k",
+                "8000k",
                 "-pix_fmt",
                 "yuv420p",
                 "-g",
                 str(fps * 2),
+                "-keyint_min",
+                str(fps),
+                "-sc_threshold",
+                "0",
                 "-r",
                 str(fps),
-                "-vsync",
-                "cfr",
                 "-s",
                 resolution,
                 "-c:a",
@@ -971,7 +1011,11 @@ class YouTubeStreamer:
                 "128k",
                 "-ar",
                 "44100",
+                "-af",
+                "asetpts=PTS-STARTPTS",
                 "-shortest",
+                "-fflags",
+                "+genpts",
                 "-f",
                 "flv",
                 self.stream_url,
