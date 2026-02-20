@@ -69,11 +69,11 @@ class Config:
         "timelapse_dir": os.path.join(tempfile.gettempdir(), "spoolup", "timelapse"),
         "client_secrets_file": "client_secrets.json",
         "token_file": "youtube_token.json",
-        "stream_resolution": "1280x720",
+        "stream_resolution": "854x480",
         "stream_fps": 15,
-        "stream_bitrate": "750k",
-        "timelapse_mode": "local",  # "local" or "remote"
-        "printer_ip": "",  # For remote timelapse mode (e.g., "192.168.1.100")
+        "stream_bitrate": "2000k",
+        "timelapse_mode": "local",
+        "printer_ip": "",
         "youtube_category_id": "28",
         "video_privacy": "private",
         "stream_privacy": "unlisted",
@@ -820,6 +820,12 @@ class YouTubeStreamer:
                 logger.info(f"Health check passed: {message}")
             else:
                 health = details.get("health", "unknown")
+                reasons = details.get("reasons", [])
+
+                is_starvation = any(
+                    r.get("type") == "videoIngestionStarved" for r in reasons
+                )
+
                 if health == "bad":
                     consecutive_bad_health += 1
                     logger.warning(
@@ -829,6 +835,14 @@ class YouTubeStreamer:
                         logger.error(
                             f"Stream health has been bad for {consecutive_bad_health * 30}s - likely causing viewer freezes"
                         )
+
+                    if is_starvation and consecutive_bad_health == 6:
+                        logger.error(
+                            "Video ingestion starvation detected for 3 minutes - attempting FFmpeg restart"
+                        )
+                        self._restart_ffmpeg_stream()
+                        consecutive_bad_health = 0
+                        continue
                 else:
                     consecutive_failures += 1
                     logger.warning(
@@ -861,6 +875,122 @@ class YouTubeStreamer:
                 break
 
         logger.info("Health check loop ended")
+
+    def _restart_ffmpeg_stream(self):
+        logger.warning("Restarting FFmpeg stream due to ingestion starvation")
+        try:
+            if self.ffmpeg_process:
+                logger.info("Terminating existing FFmpeg process")
+                self.ffmpeg_process.terminate()
+                try:
+                    self.ffmpeg_process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self.ffmpeg_process.kill()
+                    self.ffmpeg_process.wait()
+                self.ffmpeg_process = None
+
+            time.sleep(3)
+
+            webcam_url = (
+                self.config.get("webcam_url") or "http://localhost:8080/?action=stream"
+            )
+            logger.info("Restarting FFmpeg with fresh connection")
+
+            if not self.stream_url:
+                logger.error("Cannot restart - no stream URL available")
+                return
+
+            resolution = self.config.get("stream_resolution") or "854x480"
+            fps = self.config.get("stream_fps") or 15
+            bitrate = self.config.get("stream_bitrate") or "2000k"
+
+            cmd = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "warning",
+                "-thread_queue_size",
+                "8192",
+                "-f",
+                "mjpeg",
+                "-probesize",
+                "32",
+                "-analyzeduration",
+                "0",
+                "-i",
+                webcam_url,
+                "-f",
+                "lavfi",
+                "-thread_queue_size",
+                "1024",
+                "-i",
+                "anullsrc=r=44100:cl=stereo",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-tune",
+                "zerolatency",
+                "-profile:v",
+                "baseline",
+                "-level",
+                "3.0",
+                "-b:v",
+                bitrate,
+                "-minrate",
+                bitrate,
+                "-maxrate",
+                bitrate,
+                "-bufsize",
+                "16000k",
+                "-pix_fmt",
+                "yuv420p",
+                "-g",
+                str(fps * 2),
+                "-keyint_min",
+                str(fps),
+                "-sc_threshold",
+                "0",
+                "-r",
+                str(fps),
+                "-s",
+                resolution,
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k",
+                "-ar",
+                "44100",
+                "-ac",
+                "2",
+                "-shortest",
+                "-fflags",
+                "+genpts+discardcorrupt",
+                "-f",
+                "flv",
+                "-flvflags",
+                "no_duration_filesize",
+                self.stream_url,
+            ]
+
+            self.ffmpeg_process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                bufsize=1,
+                universal_newlines=True,
+            )
+
+            self._start_ffmpeg_stderr_logger()
+
+            time.sleep(5)
+            if self.ffmpeg_process.poll() is not None:
+                logger.error("FFmpeg restart failed (process exited)")
+            else:
+                logger.info("FFmpeg restarted successfully")
+
+        except Exception as e:
+            logger.error(f"Failed to restart FFmpeg stream: {e}")
 
     def _start_health_monitor(self):
         self._health_check_thread = threading.Thread(target=self._health_check_loop)
@@ -966,15 +1096,19 @@ class YouTubeStreamer:
                 "-loglevel",
                 "warning",
                 "-thread_queue_size",
-                "4096",
+                "8192",
                 "-f",
                 "mjpeg",
-                "-use_wallclock_as_timestamps",
-                "1",
+                "-probesize",
+                "32",
+                "-analyzeduration",
+                "0",
                 "-i",
                 webcam_url,
                 "-f",
                 "lavfi",
+                "-thread_queue_size",
+                "1024",
                 "-i",
                 "anullsrc=r=44100:cl=stereo",
                 "-c:v",
@@ -989,10 +1123,12 @@ class YouTubeStreamer:
                 "3.0",
                 "-b:v",
                 bitrate,
+                "-minrate",
+                bitrate,
                 "-maxrate",
                 bitrate,
                 "-bufsize",
-                "8000k",
+                "16000k",
                 "-pix_fmt",
                 "yuv420p",
                 "-g",
@@ -1011,13 +1147,15 @@ class YouTubeStreamer:
                 "128k",
                 "-ar",
                 "44100",
-                "-af",
-                "asetpts=PTS-STARTPTS",
+                "-ac",
+                "2",
                 "-shortest",
                 "-fflags",
-                "+genpts",
+                "+genpts+discardcorrupt",
                 "-f",
                 "flv",
+                "-flvflags",
+                "no_duration_filesize",
                 self.stream_url,
             ]
 
