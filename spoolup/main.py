@@ -716,6 +716,26 @@ class YouTubeStreamer:
         else:
             logger.warning("FFmpeg process not available")
 
+    def _test_rtmp_connectivity(self):
+        import socket
+
+        try:
+            host = "a.rtmp.youtube.com"
+            port = 1935
+            logger.info(f"Testing TCP connection to {host}:{port}...")
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)
+            result = sock.connect_ex((host, port))
+            if result == 0:
+                logger.info(f"TCP connection to {host}:{port} successful")
+            else:
+                logger.error(
+                    f"TCP connection to {host}:{port} failed with error code: {result}"
+                )
+            sock.close()
+        except Exception as e:
+            logger.error(f"RTMP connectivity test failed: {e}")
+
     def _transition_broadcast(self, broadcast_id: str, status: str) -> bool:
         try:
             broadcast = (
@@ -916,7 +936,7 @@ class YouTubeStreamer:
                 "ffmpeg",
                 "-hide_banner",
                 "-loglevel",
-                "info",
+                "verbose",
                 "-thread_queue_size",
                 "8192",
                 "-f",
@@ -1096,6 +1116,9 @@ class YouTubeStreamer:
             logger.error(f"Webcam connectivity test failed: {e}")
             return False
 
+        logger.info(f"Testing RTMP connectivity to YouTube...")
+        self._test_rtmp_connectivity()
+
         try:
             resolution: str = self.config.get("stream_resolution") or "1280x720"
             fps: int = self.config.get("stream_fps") or 30
@@ -1105,7 +1128,7 @@ class YouTubeStreamer:
                 "ffmpeg",
                 "-hide_banner",
                 "-loglevel",
-                "info",
+                "verbose",
                 "-thread_queue_size",
                 "8192",
                 "-f",
