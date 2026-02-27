@@ -388,7 +388,7 @@ class MoonrakerClient:
         stats = {}
         try:
             response = requests.get(
-                f"{self.base_url}/printer/objects/query?print_stats&virtual_sdcard&toolhead&extruder&heater_bed",
+                f"{self.base_url}/printer/objects/query?print_stats&virtual_sdcard&toolhead&extruder&heater_bed&temperature_sensor chamber&temperature_sensor mcu",
                 params={
                     "print_stats": None,
                     "virtual_sdcard": None,
@@ -469,6 +469,14 @@ class MoonrakerClient:
             bed_target = heater_bed.get("target", 0)
             stats["bed_temp"] = f"{bed_temp:.0f}°C" if bed_temp else "N/A"
             stats["bed_target"] = f"{bed_target:.0f}°C" if bed_target else "N/A"
+
+            chamber = status.get("temperature_sensor chamber", {})
+            chamber_temp = chamber.get("temperature", 0)
+            stats["chamber_temp"] = f"{chamber_temp:.0f}°C" if chamber_temp else "N/A"
+
+            mcu = status.get("temperature_sensor mcu", {})
+            mcu_temp = mcu.get("temperature", 0)
+            stats["mcu_temp"] = f"{mcu_temp:.0f}°C" if mcu_temp else "N/A"
 
         except Exception as e:
             logger.error(f"Failed to get print stats: {e}")
@@ -651,12 +659,16 @@ class YouTubeStreamer:
             eta = print_stats.get("eta", "N/A")
             extruder_temp = print_stats.get("extruder_temp", "N/A")
             bed_temp = print_stats.get("bed_temp", "N/A")
+            chamber_temp = print_stats.get("chamber_temp", "N/A")
+            mcu_temp = print_stats.get("mcu_temp", "N/A")
 
             # Format statistics in a table-like layout
             lines.extend(
                 [
                     f"Extruder:     {extruder_temp}",
                     f"Bed:          {bed_temp}",
+                    f"Chamber:      {chamber_temp}",
+                    f"MCU:          {mcu_temp}",
                     f"Filament:     {filament}",
                     f"Layer:        {current_layer} of {total_layers}",
                     "",
