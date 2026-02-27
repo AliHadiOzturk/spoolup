@@ -550,6 +550,12 @@ class YouTubeStreamer:
             logger.info(f"Live stream created: {stream_id}")
             logger.info(f"Stream URL: {self.stream_url}")
 
+            logger.info("Validating stream URL with test frame...")
+            if not self._validate_stream_url():
+                logger.error("Stream URL validation failed")
+                return False
+            logger.info("Stream URL validation passed")
+
             start_time = datetime.now(timezone.utc)
             end_time = start_time + timedelta(hours=24)
 
@@ -735,6 +741,55 @@ class YouTubeStreamer:
             sock.close()
         except Exception as e:
             logger.error(f"RTMP connectivity test failed: {e}")
+
+    def _validate_stream_url(self) -> bool:
+        import subprocess
+        import time
+
+        if not self.stream_url:
+            logger.error("No stream URL available for validation")
+            return False
+
+        try:
+            logger.info(f"Testing stream URL: {self.stream_url}")
+            cmd = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=duration=3:size=320x240:rate=1",
+                "-pix_fmt",
+                "yuv420p",
+                "-f",
+                "flv",
+                self.stream_url,
+            ]
+
+            logger.info(f"Running validation command: {' '.join(cmd)}")
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10,
+            )
+
+            if result.returncode == 0:
+                logger.info("Stream URL validation succeeded")
+                return True
+            else:
+                stderr = result.stderr.decode("utf-8", errors="ignore")
+                logger.error(f"Stream URL validation failed: {stderr}")
+                return False
+
+        except subprocess.TimeoutExpired:
+            logger.info("Stream URL validation timed out (may still work)")
+            return True
+        except Exception as e:
+            logger.error(f"Stream URL validation error: {e}")
+            return False
 
     def _transition_broadcast(self, broadcast_id: str, status: str) -> bool:
         try:
