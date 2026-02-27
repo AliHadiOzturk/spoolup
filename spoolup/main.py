@@ -1267,33 +1267,6 @@ class YouTubeStreamer:
                     logger.error("Failed to transition to testing state")
                     return False
 
-            if self.live_stream and self.live_broadcast:
-                stream_id = self.live_stream["id"]
-                broadcast_id = self.live_broadcast["id"]
-
-                if not self._wait_for_stream_active(stream_id, timeout=60):
-                    # Check if FFmpeg is still running
-                    if self.ffmpeg_process.poll() is not None:
-                        logger.error(
-                            "FFmpeg process died while waiting for stream to become active"
-                        )
-                        return False
-                    logger.warning(
-                        "Stream did not become active within 60s, continuing anyway"
-                    )
-                    logger.info(
-                        "Stream may still become active - health check will monitor"
-                    )
-
-                # Verify FFmpeg is still running before attempting state transition
-                if self.ffmpeg_process.poll() is not None:
-                    logger.error("FFmpeg process died before state transition")
-                    return False
-
-                if not self._transition_broadcast(broadcast_id, "testing"):
-                    logger.error("Failed to transition to testing state")
-                    return False
-
                 time.sleep(10)
 
                 live_success = False
