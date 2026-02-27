@@ -662,6 +662,8 @@ class YouTubeStreamer:
         """Wait for the stream to become active (receiving data from FFmpeg)."""
         logger.info(f"Waiting for stream {stream_id} to become active...")
         start_time = time.time()
+        last_status = None
+        status_count = 0
         while time.time() - start_time < timeout:
             try:
                 stream = (
@@ -671,18 +673,48 @@ class YouTubeStreamer:
                 )
                 if stream.get("items"):
                     status = stream["items"][0]["status"]["streamStatus"]
-                    logger.info(f"Stream status: {status}")
+                    health = stream["items"][0]["status"].get("healthStatus", {})
+                    health_status = health.get("status", "unknown")
+
+                    if status != last_status:
+                        logger.info(
+                            f"Stream status changed: {last_status} -> {status} (health: {health_status})"
+                        )
+                        last_status = status
+                        status_count = 0
+                    else:
+                        status_count += 1
+                        if status_count % 5 == 0:
+                            logger.info(
+                                f"Stream still {status} after {status_count * 2}s (health: {health_status})"
+                            )
+
                     if status == "active":
                         logger.info("Stream is now active")
                         return True
                     elif status == "error":
                         logger.error("Stream is in error state")
+                        self._log_ffmpeg_status()
                         return False
+                    elif status == "inactive" and status_count >= 3:
+                        self._log_ffmpeg_status()
+
             except Exception as e:
                 logger.warning(f"Failed to check stream status: {e}")
             time.sleep(2)
         logger.warning(f"Stream did not become active within {timeout} seconds")
+        self._log_ffmpeg_status()
         return False
+
+    def _log_ffmpeg_status(self):
+        if self.ffmpeg_process:
+            exit_code = self.ffmpeg_process.poll()
+            if exit_code is not None:
+                logger.error(f"FFmpeg process has exited with code: {exit_code}")
+            else:
+                logger.info("FFmpeg process is still running")
+        else:
+            logger.warning("FFmpeg process not available")
 
     def _transition_broadcast(self, broadcast_id: str, status: str) -> bool:
         try:
@@ -884,7 +916,7 @@ class YouTubeStreamer:
                 "ffmpeg",
                 "-hide_banner",
                 "-loglevel",
-                "warning",
+                "info",
                 "-thread_queue_size",
                 "8192",
                 "-f",
@@ -893,7 +925,6 @@ class YouTubeStreamer:
                 "32768",
                 "-analyzeduration",
                 "1000000",
-                "-re",
                 "-i",
                 webcam_url,
                 "-c:v",
@@ -1049,6 +1080,23 @@ class YouTubeStreamer:
             return False
 
         try:
+            logger.info(f"Testing webcam connectivity: {webcam_url}")
+            import requests
+
+            response = requests.get(webcam_url, timeout=10, stream=True)
+            if response.status_code != 200:
+                logger.error(f"Webcam returned HTTP {response.status_code}")
+                return False
+            chunk = next(response.iter_content(chunk_size=1024), None)
+            if not chunk:
+                logger.error("Webcam stream returned empty data")
+                return False
+            logger.info("Webcam connectivity test passed")
+        except Exception as e:
+            logger.error(f"Webcam connectivity test failed: {e}")
+            return False
+
+        try:
             resolution: str = self.config.get("stream_resolution") or "1280x720"
             fps: int = self.config.get("stream_fps") or 30
             bitrate: str = self.config.get("stream_bitrate") or "4000k"
@@ -1057,7 +1105,7 @@ class YouTubeStreamer:
                 "ffmpeg",
                 "-hide_banner",
                 "-loglevel",
-                "warning",
+                "info",
                 "-thread_queue_size",
                 "8192",
                 "-f",
@@ -1066,7 +1114,6 @@ class YouTubeStreamer:
                 "32768",
                 "-analyzeduration",
                 "1000000",
-                "-re",
                 "-i",
                 webcam_url,
                 "-c:v",
@@ -1258,12 +1305,7 @@ class YouTubeStreamer:
                         break
                     line = line.strip()
                     if line:
-                        if "error" in line.lower() or "failed" in line.lower():
-                            logger.error(f"FFmpeg: {line}")
-                        elif "warning" in line.lower():
-                            logger.warning(f"FFmpeg: {line}")
-                        else:
-                            logger.debug(f"FFmpeg: {line}")
+                        logger.info(f"FFmpeg: {line}")
             except Exception as e:
                 logger.debug(f"FFmpeg stderr logger exited: {e}")
 
