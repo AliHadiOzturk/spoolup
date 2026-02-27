@@ -388,11 +388,13 @@ class MoonrakerClient:
         stats = {}
         try:
             response = requests.get(
-                f"{self.base_url}/printer/objects/query?print_stats&virtual_sdcard&toolhea",
+                f"{self.base_url}/printer/objects/query?print_stats&virtual_sdcard&toolhead&extruder&heater_bed",
                 params={
                     "print_stats": None,
                     "virtual_sdcard": None,
                     "toolhead": None,
+                    "extruder": None,
+                    "heater_bed": None,
                 },
                 timeout=10,
             )
@@ -403,6 +405,8 @@ class MoonrakerClient:
             print_stats = status.get("print_stats", {})
             virtual_sdcard = status.get("virtual_sdcard", {})
             toolhead = status.get("toolhead", {})
+            extruder = status.get("extruder", {})
+            heater_bed = status.get("heater_bed", {})
 
             speed = toolhead.get("speed", 0)
             stats["speed"] = f"{speed:.0f} mm/s" if speed else "100 mm/s"
@@ -452,7 +456,19 @@ class MoonrakerClient:
             else:
                 stats["slicer_time"] = "N/A"
 
-            stats["flow"] = "N/A"
+            extruder_temp = extruder.get("temperature", 0)
+            extruder_target = extruder.get("target", 0)
+            stats["extruder_temp"] = (
+                f"{extruder_temp:.0f}°C" if extruder_temp else "N/A"
+            )
+            stats["extruder_target"] = (
+                f"{extruder_target:.0f}°C" if extruder_target else "N/A"
+            )
+
+            bed_temp = heater_bed.get("temperature", 0)
+            bed_target = heater_bed.get("target", 0)
+            stats["bed_temp"] = f"{bed_temp:.0f}°C" if bed_temp else "N/A"
+            stats["bed_target"] = f"{bed_target:.0f}°C" if bed_target else "N/A"
 
         except Exception as e:
             logger.error(f"Failed to get print stats: {e}")
@@ -626,8 +642,6 @@ class YouTubeStreamer:
 
         if print_stats:
             # Extract statistics
-            speed = print_stats.get("speed", "N/A")
-            flow = print_stats.get("flow", "N/A")
             filament = print_stats.get("filament_used", "N/A")
             current_layer = print_stats.get("current_layer", "N/A")
             total_layers = print_stats.get("total_layers", "N/A")
@@ -635,12 +649,14 @@ class YouTubeStreamer:
             slicer_time = print_stats.get("slicer_time", "N/A")
             total_time = print_stats.get("total_time", "N/A")
             eta = print_stats.get("eta", "N/A")
+            extruder_temp = print_stats.get("extruder_temp", "N/A")
+            bed_temp = print_stats.get("bed_temp", "N/A")
 
             # Format statistics in a table-like layout
             lines.extend(
                 [
-                    f"Speed:        {speed}",
-                    f"Flow:         {flow}",
+                    f"Extruder:     {extruder_temp}",
+                    f"Bed:          {bed_temp}",
                     f"Filament:     {filament}",
                     f"Layer:        {current_layer} of {total_layers}",
                     "",
