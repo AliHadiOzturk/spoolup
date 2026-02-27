@@ -738,9 +738,14 @@ class YouTubeStreamer:
             return False
 
     def _check_stream_health(self) -> tuple[bool, str, dict]:
+        """Check stream health - returns status but never marks as unhealthy for bad health.
+
+        Even if health is 'bad' or 'readable', the stream continues. This mimics
+        ffmpeg behavior which keeps running even when frames freeze.
+        """
         try:
             if not self.live_stream:
-                return False, "No live stream", {}
+                return True, "No live stream", {}
             logger.info(f"Checking stream health for {self.live_stream['id']}...")
             stream = (
                 self.youtube.liveStreams()
@@ -749,7 +754,7 @@ class YouTubeStreamer:
             )
             if not stream.get("items"):
                 logger.warning("Stream not found in health check")
-                return False, "Stream not found", {}
+                return True, "Stream not found", {}
             status = stream["items"][0]["status"]
             stream_status = status.get("streamStatus")
             health_status = status.get("healthStatus", {})
@@ -761,6 +766,7 @@ class YouTubeStreamer:
                 for reason in reasons:
                     logger.warning(f"Health issue: {reason}")
 
+            # Only treat stream errors as unhealthy - bad health is acceptable
             if stream_status == "error":
                 logger.error("Stream is in error state")
                 return (
@@ -768,19 +774,25 @@ class YouTubeStreamer:
                     f"Stream error state",
                     {"status": stream_status, "health": health, "reasons": reasons},
                 )
+
+            # Treat inactive as a warning but not unhealthy - ffmpeg may recover
             if stream_status == "inactive":
-                logger.warning("Stream is inactive")
+                logger.warning("Stream is inactive, but continuing...")
                 return (
-                    False,
-                    "Stream inactive",
+                    True,
+                    f"Status: {stream_status}, Health: {health}",
                     {"status": stream_status, "health": health, "reasons": reasons},
                 )
+
+            # Even 'bad' health is acceptable - keep streaming like ffmpeg does
             if health == "bad":
+                logger.warning(f"Health is {health}, but continuing to stream...")
                 return (
-                    False,
-                    f"Health is bad",
+                    True,
+                    f"Status: {stream_status}, Health: {health}",
                     {"status": stream_status, "health": health, "reasons": reasons},
                 )
+
             return (
                 True,
                 f"Status: {stream_status}, Health: {health}",
@@ -788,16 +800,17 @@ class YouTubeStreamer:
             )
         except Exception as e:
             logger.error(f"Health check error: {e}", exc_info=True)
-            return False, f"Health check error: {e}", {}
+            # Even on health check errors, keep streaming
+            return True, f"Health check error (continuing): {e}", {}
 
     def _health_check_loop(self):
-        consecutive_failures = 0
-        consecutive_bad_health = 0
+        consecutive_starvation = 0
         stream_start_time = time.time()
-        startup_grace_period = 600
         check_count = 0
 
-        logger.info("Health check loop started")
+        logger.info(
+            "Health check loop started - will continue streaming regardless of health status"
+        )
         while self.is_streaming:
             time.sleep(30)
             if not self.is_streaming:
@@ -809,70 +822,33 @@ class YouTubeStreamer:
             logger.info(f"Health check #{check_count} after {elapsed:.0f}s")
 
             is_healthy, message, details = self._check_stream_health()
+            health = details.get("health", "unknown")
+            reasons = details.get("reasons", [])
 
             if is_healthy:
-                if consecutive_failures > 0 or consecutive_bad_health > 0:
-                    logger.info(
-                        f"Health check recovered after {consecutive_failures} failures and {consecutive_bad_health} bad health"
-                    )
-                consecutive_failures = 0
-                consecutive_bad_health = 0
-                logger.info(f"Health check passed: {message}")
+                consecutive_starvation = 0
+                logger.info(f"Health check: {message}")
             else:
-                health = details.get("health", "unknown")
-                reasons = details.get("reasons", [])
+                logger.warning(f"Health check issue (continuing anyway): {message}")
 
-                is_starvation = any(
-                    r.get("type") == "videoIngestionStarved" for r in reasons
+            is_starvation = any(
+                r.get("type") == "videoIngestionStarved" for r in reasons
+            )
+
+            if is_starvation and health in ["bad", "ok"]:
+                consecutive_starvation += 1
+                logger.warning(
+                    f"Video ingestion starvation detected ({consecutive_starvation} consecutive checks)"
                 )
 
-                if health == "bad":
-                    consecutive_bad_health += 1
-                    logger.warning(
-                        f"Health is bad ({consecutive_bad_health} consecutive): {message}"
-                    )
-                    if consecutive_bad_health >= 3:
-                        logger.error(
-                            f"Stream health has been bad for {consecutive_bad_health * 30}s - likely causing viewer freezes"
-                        )
-
-                    if is_starvation and consecutive_bad_health == 6:
-                        logger.error(
-                            "Video ingestion starvation detected for 3 minutes - attempting FFmpeg restart"
-                        )
-                        self._restart_ffmpeg_stream()
-                        consecutive_bad_health = 0
-                        continue
-                else:
-                    consecutive_failures += 1
-                    logger.warning(
-                        f"Health check failed ({consecutive_failures} failures): {message}"
-                    )
-
-                max_failures_during_grace = 12
-                max_failures_after_grace = 6
-
-                if elapsed < startup_grace_period:
-                    max_allowed = max_failures_during_grace
-                    period = "grace period"
-                else:
-                    max_allowed = max_failures_after_grace
-                    period = "after grace period"
-
-                total_failures = consecutive_failures + consecutive_bad_health
-                if total_failures < max_allowed:
-                    logger.info(
-                        f"Within {period} ({total_failures}/{max_allowed} failures), continuing..."
-                    )
-                    continue
-                else:
+                if consecutive_starvation >= 6:
                     logger.error(
-                        f"TOO MANY FAILURES {period}: {total_failures} >= {max_allowed}"
+                        "Video ingestion starvation detected for 3 minutes - attempting FFmpeg restart"
                     )
-
-                logger.error("STOPPING STREAM DUE TO HEALTH CHECK FAILURES")
-                self.stop_streaming()
-                break
+                    self._restart_ffmpeg_stream()
+                    consecutive_starvation = 0
+            else:
+                consecutive_starvation = 0
 
         logger.info("Health check loop ended")
 
@@ -914,9 +890,10 @@ class YouTubeStreamer:
                 "-f",
                 "mjpeg",
                 "-probesize",
-                "32",
+                "32768",
                 "-analyzeduration",
-                "0",
+                "1000000",
+                "-re",
                 "-i",
                 webcam_url,
                 "-c:v",
@@ -1086,9 +1063,10 @@ class YouTubeStreamer:
                 "-f",
                 "mjpeg",
                 "-probesize",
-                "32",
+                "32768",
                 "-analyzeduration",
-                "0",
+                "1000000",
+                "-re",
                 "-i",
                 webcam_url,
                 "-c:v",
@@ -1145,7 +1123,19 @@ class YouTubeStreamer:
 
             time.sleep(5)
             if self.ffmpeg_process.poll() is not None:
-                logger.error("FFmpeg failed to start (process exited)")
+                exit_code = self.ffmpeg_process.poll()
+                logger.error(
+                    f"FFmpeg failed to start (process exited with code {exit_code})"
+                )
+                if self.ffmpeg_process.stderr:
+                    try:
+                        stderr_output = self.ffmpeg_process.stderr.read()
+                        if stderr_output:
+                            logger.error(
+                                f"FFmpeg error output: {stderr_output[-2000:]}"
+                            )
+                    except Exception as e:
+                        logger.debug(f"Could not read FFmpeg stderr: {e}")
                 return False
 
             if self.live_stream and self.live_broadcast:
@@ -1153,12 +1143,48 @@ class YouTubeStreamer:
                 broadcast_id = self.live_broadcast["id"]
 
                 if not self._wait_for_stream_active(stream_id, timeout=60):
+                    if self.ffmpeg_process.poll() is not None:
+                        logger.error(
+                            "FFmpeg process died while waiting for stream to become active"
+                        )
+                        return False
                     logger.warning(
                         "Stream did not become active within 60s, continuing anyway"
                     )
                     logger.info(
                         "Stream may still become active - health check will monitor"
                     )
+
+                if self.ffmpeg_process.poll() is not None:
+                    logger.error("FFmpeg process died before state transition")
+                    return False
+
+                if not self._transition_broadcast(broadcast_id, "testing"):
+                    logger.error("Failed to transition to testing state")
+                    return False
+
+            if self.live_stream and self.live_broadcast:
+                stream_id = self.live_stream["id"]
+                broadcast_id = self.live_broadcast["id"]
+
+                if not self._wait_for_stream_active(stream_id, timeout=60):
+                    # Check if FFmpeg is still running
+                    if self.ffmpeg_process.poll() is not None:
+                        logger.error(
+                            "FFmpeg process died while waiting for stream to become active"
+                        )
+                        return False
+                    logger.warning(
+                        "Stream did not become active within 60s, continuing anyway"
+                    )
+                    logger.info(
+                        "Stream may still become active - health check will monitor"
+                    )
+
+                # Verify FFmpeg is still running before attempting state transition
+                if self.ffmpeg_process.poll() is not None:
+                    logger.error("FFmpeg process died before state transition")
+                    return False
 
                 if not self._transition_broadcast(broadcast_id, "testing"):
                     logger.error("Failed to transition to testing state")
