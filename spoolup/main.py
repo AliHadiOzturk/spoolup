@@ -135,6 +135,7 @@ class MoonrakerClient:
         self._shutdown = False
         self._last_ping_time = 0.0
         self._ping_interval = 30.0
+        self._temperatures: Dict[str, float] = {}
 
     def connect_websocket(self):
         try:
@@ -269,6 +270,9 @@ class MoonrakerClient:
         if "print_stats" in status:
             stats = status["print_stats"]
 
+            if "filename" in stats:
+                self.current_file = stats["filename"]
+
             if "state" in stats:
                 new_state = stats["state"]
                 if new_state != self.print_state:
@@ -282,11 +286,10 @@ class MoonrakerClient:
                                 f"Print start ignored - initial state already handled"
                             )
                             return
-                        logger.info(
-                            f"Triggering print start callback for: {stats.get('filename')}"
-                        )
+                        filename = self.current_file or stats.get("filename")
+                        logger.info(f"Triggering print start callback for: {filename}")
                         self._initial_state_handled = True
-                        self.on_print_started(stats.get("filename"))
+                        self.on_print_started(filename)
                     elif new_state == "complete" and old_state in [
                         "printing",
                         "error",
@@ -306,8 +309,24 @@ class MoonrakerClient:
                             "Print error detected - stream continuing. Waiting for recovery or completion..."
                         )
 
-            if "filename" in stats:
-                self.current_file = stats["filename"]
+        self._extract_temperatures(status)
+
+    def _extract_temperatures(self, status: dict):
+        temp_keys = [
+            "extruder",
+            "heater_bed",
+            "temperature_sensor chamber",
+            "temperature_sensor mcu",
+            "temperature_fan chamber_fan",
+        ]
+        for key in temp_keys:
+            if key in status:
+                obj = status[key]
+                if "temperature" in obj:
+                    self._temperatures[key] = obj["temperature"]
+
+    def get_temperatures(self) -> Dict[str, float]:
+        return self._temperatures.copy()
 
     def on_print_started(self, filename: str):
         logger.info(f"Print started: {filename}")
@@ -456,7 +475,9 @@ class MoonrakerClient:
             else:
                 stats["slicer_time"] = "N/A"
 
-            extruder_temp = extruder.get("temperature", 0)
+            temps = self._temperatures
+
+            extruder_temp = extruder.get("temperature", 0) or temps.get("extruder", 0)
             extruder_target = extruder.get("target", 0)
             stats["extruder_temp"] = (
                 f"{extruder_temp:.0f}°C" if extruder_temp else "N/A"
@@ -465,17 +486,17 @@ class MoonrakerClient:
                 f"{extruder_target:.0f}°C" if extruder_target else "N/A"
             )
 
-            bed_temp = heater_bed.get("temperature", 0)
+            bed_temp = heater_bed.get("temperature", 0) or temps.get("heater_bed", 0)
             bed_target = heater_bed.get("target", 0)
             stats["bed_temp"] = f"{bed_temp:.0f}°C" if bed_temp else "N/A"
             stats["bed_target"] = f"{bed_target:.0f}°C" if bed_target else "N/A"
 
-            chamber = status.get("temperature_sensor chamber", {})
-            chamber_temp = chamber.get("temperature", 0)
+            chamber_temp = temps.get("temperature_sensor chamber", 0) or temps.get(
+                "temperature_fan chamber_fan", 0
+            )
             stats["chamber_temp"] = f"{chamber_temp:.0f}°C" if chamber_temp else "N/A"
 
-            mcu = status.get("temperature_sensor mcu", {})
-            mcu_temp = mcu.get("temperature", 0)
+            mcu_temp = temps.get("temperature_sensor mcu", 0)
             stats["mcu_temp"] = f"{mcu_temp:.0f}°C" if mcu_temp else "N/A"
 
         except Exception as e:
