@@ -72,6 +72,7 @@ class Config:
         "stream_resolution": "854x480",
         "stream_fps": 15,
         "stream_bitrate": "2000k",
+        "stream_buffer_size": "2000k",
         "timelapse_mode": "local",
         "printer_ip": "",
         "youtube_category_id": "28",
@@ -987,6 +988,21 @@ class YouTubeStreamer:
             else:
                 logger.warning(f"Health check issue (continuing anyway): {message}")
 
+            # Log latency/buffer indicators
+            latency_indicators = [
+                "videoIngestionStarved",
+                "videoIngestionFasterThanRealtime",
+                "videoProcessingStalled",
+            ]
+            for reason in reasons:
+                reason_type = reason.get("type", "")
+                if reason_type in latency_indicators:
+                    logger.warning(f"Latency indicator detected: {reason_type}")
+                if "buffer" in reason.get("description", "").lower():
+                    logger.warning(
+                        f"Buffer issue detected: {reason.get('description')}"
+                    )
+
             is_starvation = any(
                 r.get("type") == "videoIngestionStarved" for r in reasons
             )
@@ -1035,12 +1051,19 @@ class YouTubeStreamer:
             resolution = self.config.get("stream_resolution") or "854x480"
             fps = self.config.get("stream_fps") or 15
             bitrate = self.config.get("stream_bitrate") or "2000k"
+            buffer_size = self.config.get("stream_buffer_size") or "2000k"
 
             cmd = [
                 "ffmpeg",
                 "-hide_banner",
                 "-loglevel",
                 "warning",
+                "-fflags",
+                "nobuffer",
+                "-analyzeduration",
+                "0",
+                "-fflags",
+                "+discardcorrupt",
                 "-f",
                 "mjpeg",
                 "-i",
@@ -1060,7 +1083,13 @@ class YouTubeStreamer:
                 "-global_quality",
                 "25",
                 "-g",
-                "60",
+                "30",
+                "-threads",
+                "0",
+                "-maxrate",
+                buffer_size,
+                "-bufsize",
+                buffer_size,
                 "-c:a",
                 "aac",
                 "-b:a",
@@ -1206,12 +1235,19 @@ class YouTubeStreamer:
             resolution: str = self.config.get("stream_resolution") or "1280x720"
             fps: int = self.config.get("stream_fps") or 30
             bitrate: str = self.config.get("stream_bitrate") or "4000k"
+            buffer_size: str = self.config.get("stream_buffer_size") or "4000k"
 
             cmd = [
                 "ffmpeg",
                 "-hide_banner",
                 "-loglevel",
                 "warning",
+                "-fflags",
+                "nobuffer",
+                "-analyzeduration",
+                "0",
+                "-fflags",
+                "+discardcorrupt",
                 "-f",
                 "mjpeg",
                 "-i",
@@ -1231,7 +1267,13 @@ class YouTubeStreamer:
                 "-global_quality",
                 "25",
                 "-g",
-                "60",
+                "30",
+                "-threads",
+                "0",
+                "-maxrate",
+                buffer_size,
+                "-bufsize",
+                buffer_size,
                 "-c:a",
                 "aac",
                 "-b:a",
