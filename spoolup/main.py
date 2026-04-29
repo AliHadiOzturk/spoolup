@@ -75,6 +75,7 @@ class Config:
         "stream_buffer_size": "2000k",
         "timelapse_mode": "local",
         "printer_ip": "",
+        "moonraker_port": "4409",
         "youtube_category_id": "28",
         "video_privacy": "private",
         "stream_privacy": "unlisted",
@@ -961,7 +962,7 @@ class YouTubeStreamer:
             return True, f"Health check error (continuing): {e}", {}
 
     def _health_check_loop(self):
-        consecutive_starvation = 0
+        consecutive_issues = 0
         stream_start_time = time.time()
         check_count = 0
 
@@ -981,9 +982,10 @@ class YouTubeStreamer:
             is_healthy, message, details = self._check_stream_health()
             health = details.get("health", "unknown")
             reasons = details.get("reasons", [])
+            stream_status = details.get("status", "unknown")
 
-            if is_healthy:
-                consecutive_starvation = 0
+            if is_healthy and stream_status == "active" and health == "good":
+                consecutive_issues = 0
                 logger.info(f"Health check: {message}")
             else:
                 logger.warning(f"Health check issue (continuing anyway): {message}")
@@ -1006,21 +1008,24 @@ class YouTubeStreamer:
             is_starvation = any(
                 r.get("type") == "videoIngestionStarved" for r in reasons
             )
+            is_inactive = stream_status == "inactive"
+            is_bad_health = health == "bad"
 
-            if is_starvation and health in ["bad", "ok"]:
-                consecutive_starvation += 1
+            if is_starvation or is_inactive or is_bad_health:
+                consecutive_issues += 1
                 logger.warning(
-                    f"Video ingestion starvation detected ({consecutive_starvation} consecutive checks)"
+                    f"Stream issue detected: starvation={is_starvation}, inactive={is_inactive}, bad_health={is_bad_health} ({consecutive_issues} consecutive checks)"
                 )
 
-                if consecutive_starvation >= 6:
+                if consecutive_issues >= 3:
                     logger.error(
-                        "Video ingestion starvation detected for 3 minutes - attempting FFmpeg restart"
+                        "Stream unhealthy for 90 seconds - attempting FFmpeg restart"
                     )
                     self._restart_ffmpeg_stream()
-                    consecutive_starvation = 0
+                    consecutive_issues = 0
+                    stream_start_time = time.time()
             else:
-                consecutive_starvation = 0
+                consecutive_issues = 0
 
         logger.info("Health check loop ended")
 
@@ -1073,7 +1078,7 @@ class YouTubeStreamer:
                 "-i",
                 "anullsrc=channel_layout=stereo:sample_rate=44100",
                 "-filter_complex",
-                "[0:v]fps=30,format=yuv420p[v]",
+                f"[0:v]fps={fps},scale={resolution},format=yuv420p[v]",
                 "-map",
                 "[v]",
                 "-map",
@@ -1083,11 +1088,11 @@ class YouTubeStreamer:
                 "-global_quality",
                 "25",
                 "-g",
-                "30",
+                str(fps),
                 "-threads",
                 "0",
                 "-maxrate",
-                buffer_size,
+                bitrate,
                 "-bufsize",
                 buffer_size,
                 "-c:a",
@@ -1257,7 +1262,7 @@ class YouTubeStreamer:
                 "-i",
                 "anullsrc=channel_layout=stereo:sample_rate=44100",
                 "-filter_complex",
-                "[0:v]fps=30,format=yuv420p[v]",
+                f"[0:v]fps={fps},scale={resolution},format=yuv420p[v]",
                 "-map",
                 "[v]",
                 "-map",
@@ -1267,11 +1272,11 @@ class YouTubeStreamer:
                 "-global_quality",
                 "25",
                 "-g",
-                "30",
+                str(fps),
                 "-threads",
                 "0",
                 "-maxrate",
-                buffer_size,
+                bitrate,
                 "-bufsize",
                 buffer_size,
                 "-c:a",
@@ -1672,6 +1677,9 @@ class SpoolUp:
                 if video_url:
                     logger.info(f"Timelapse uploaded: {video_url}")
                     self._send_notification(f"Timelapse uploaded: {video_url}")
+            else:
+                logger.error(f"Timelapse file not found for: {filename}")
+                logger.error(f"Check timelapse_dir config: {self.config.get('timelapse_dir')}")
 
     def on_print_cancelled(self, filename: str):
         logger.info("Print cancelled")
@@ -1694,15 +1702,19 @@ class SpoolUp:
             return None
 
         base_name = os.path.splitext(filename)[0]
+        logger.info(f"Searching for timelapse: {base_name}.* in {timelapse_dir}")
 
         for ext in [".mp4", ".mkv", ".avi"]:
             timelapse_path = os.path.join(timelapse_dir, f"{base_name}{ext}")
             if os.path.exists(timelapse_path):
+                logger.info(f"Found exact match: {timelapse_path}")
                 return timelapse_path
 
             for f in os.listdir(timelapse_dir):
                 if f.startswith(base_name) and f.endswith(ext):
-                    return os.path.join(timelapse_dir, f)
+                    match_path = os.path.join(timelapse_dir, f)
+                    logger.info(f"Found prefix match: {match_path}")
+                    return match_path
 
         files = [
             os.path.join(timelapse_dir, f)
@@ -1712,8 +1724,11 @@ class SpoolUp:
 
         if files:
             most_recent = max(files, key=os.path.getmtime)
-            if time.time() - os.path.getmtime(most_recent) < 3600:
+            age_hours = (time.time() - os.path.getmtime(most_recent)) / 3600
+            logger.info(f"Fallback to most recent: {most_recent} (age: {age_hours:.1f}h)")
+            if time.time() - os.path.getmtime(most_recent) < 86400:
                 return most_recent
+            logger.warning(f"Most recent timelapse is too old ({age_hours:.1f}h)")
 
         logger.warning(f"Timelapse file not found for: {filename}")
         return None
@@ -1729,7 +1744,8 @@ class SpoolUp:
 
         try:
             # List timelapse files from printer
-            list_url = f"http://{printer_ip}:4409/server/files/list?root=timelapse"
+            moonraker_port = self.config.get("moonraker_port") or "4409"
+            list_url = f"http://{printer_ip}:{moonraker_port}/server/files/list?root=timelapse"
             logger.info(f"Fetching timelapse list from: {list_url}")
 
             response = requests.get(list_url, timeout=30)
