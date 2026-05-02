@@ -1,6 +1,10 @@
-# Agent Guidelines for SpoolUp
+# PROJECT KNOWLEDGE BASE
 
-## Project Overview
+**Generated:** 2026-04-28 22:19:49 UTC
+**Commit:** f418cdd
+**Branch:** main
+
+## OVERVIEW
 A Python application for Klipper-based 3D printers that streams live video to YouTube during prints and uploads timelapse videos when complete. Uses a split architecture: authentication on PC/Mac, runtime on printer.
 
 ## Build/Test/Lint Commands
@@ -99,44 +103,19 @@ mypy spoolup/ spoolup_auth/
 - Use OAuth2 flow for YouTube authentication
 - Never log sensitive tokens or credentials
 
-## File Organization
+## ANTI-PATTERNS (THIS PROJECT)
 
-```
-spoolup/
-├── spoolup/                      # Runtime package (runs on printer)
-│   ├── __init__.py               # Exports main function
-│   ├── __main__.py               # Entry point: python -m spoolup
-│   └── main.py                   # Core streaming functionality
-├── spoolup_auth/                 # Auth tool (runs on PC/Mac)
-│   ├── __init__.py               # Exports main function
-│   ├── __main__.py               # Entry point: python -m spoolup_auth
-│   └── main.py                   # OAuth flow with browser
-├── test_setup.py                 # Verification script
-├── requirements.txt              # Runtime dependencies (NO OAuth libs)
-├── requirements-auth.txt         # Auth dependencies (PC/Mac only)
-├── install.sh                    # Main installer script (interactive)
-├── install_k1.sh                 # K1-specific installer (legacy)
-├── install_generic.sh            # Generic Linux installer (legacy)
-├── spoolup.py                    # Legacy main file (deprecated)
-├── spoolup.service               # Systemd service file
-└── config.json                   # User configuration (not in repo)
-```
+- **Never catch bare `Exception`** unless re-raising
+- **Never use `print()`** in production code — use `logger` exclusively
+- **Never commit credential files** (`client_secrets.json`, `youtube_token.json`)
+- **Never log sensitive tokens** or credentials
+- **Never modify `spoolup.py`** — it is deprecated
+- **Never install OAuth libraries** on the printer runtime (use split requirements)
+- Do NOT switch away from hardware encoding (`h264_qsv`) unless fallback needed
+- Do NOT change fundamental architecture (keep MJPEG input, RTMP output)
+- Do NOT break existing configs — maintain backward compatibility
 
-## Key Dependencies
-
-**Runtime (printer):**
-- `google-api-python-client` - YouTube Data API
-- `google-auth` - Core authentication (NO OAuth libs!)
-- `websocket-client` - Moonraker WebSocket
-- `requests` - HTTP client
-- `ffmpeg` - External streaming tool
-
-**Auth (PC/Mac):**
-- `google-auth-oauthlib` - OAuth2 browser flow
-- `google-auth-httplib2` - HTTP transport
-- `google-api-python-client` - YouTube Data API
-
-## Important Notes
+## NOTES
 
 ### Architecture
 - **Split design**: Auth on PC/Mac, runtime on printer
