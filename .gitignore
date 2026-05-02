@@ -41,6 +41,14 @@ youtube_token.json
 *.swo
 *~
 
+# Agent / generated directories
+.agents/
+.sisyphus/
+.ruff_cache/
+
+# Generated files
+skills-lock.json
+
 # OS
 .DS_Store
 Thumbs.db

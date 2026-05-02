@@ -292,24 +292,24 @@ class MoonrakerClient:
                         logger.info(f"Triggering print start callback for: {filename}")
                         self._initial_state_handled = True
                         self.on_print_started(filename)
-                    elif new_state == "complete" and old_state in [
-                        "printing",
-                        "error",
-                        "paused",
-                    ]:
-                        self._initial_state_handled = False
-                        self.on_print_completed(stats.get("filename"))
-                    elif new_state == "cancelled" and old_state in [
-                        "printing",
-                        "error",
-                        "paused",
-                    ]:
-                        self._initial_state_handled = False
-                        self.on_print_cancelled(stats.get("filename"))
-                    elif new_state == "error" and old_state == "printing":
-                        logger.warning(
-                            "Print error detected - stream continuing. Waiting for recovery or completion..."
-                        )
+                elif new_state == "complete" and old_state in [
+                    "printing",
+                    "error",
+                    "paused",
+                ]:
+                    self._initial_state_handled = False
+                    self.on_print_completed(self.current_file)
+                elif new_state == "cancelled" and old_state in [
+                    "printing",
+                    "error",
+                    "paused",
+                ]:
+                    self._initial_state_handled = False
+                    self.on_print_cancelled(self.current_file)
+                elif new_state == "error" and old_state == "printing":
+                    logger.warning(
+                        "Print error detected - stream continuing. Waiting for recovery or completion..."
+                    )
 
         self._extract_temperatures(status)
 
@@ -409,13 +409,15 @@ class MoonrakerClient:
         stats = {}
         try:
             response = requests.get(
-                f"{self.base_url}/printer/objects/query?print_stats&virtual_sdcard&toolhead&extruder&heater_bed&temperature_sensor chamber&temperature_sensor mcu",
+                f"{self.base_url}/printer/objects/query",
                 params={
                     "print_stats": None,
                     "virtual_sdcard": None,
                     "toolhead": None,
                     "extruder": None,
                     "heater_bed": None,
+                    "temperature_sensor chamber": None,
+                    "temperature_sensor mcu": None,
                 },
                 timeout=10,
             )
@@ -445,11 +447,15 @@ class MoonrakerClient:
             print_duration = print_stats.get("print_duration", 0)
             total_duration = print_stats.get("total_duration", 0)
 
+            def format_duration(seconds: int) -> str:
+                """Format seconds to HH:MM:SS, handling durations > 24 hours."""
+                hours = seconds // 3600
+                minutes = (seconds % 3600) // 60
+                secs = seconds % 60
+                return f"{hours}:{minutes:02d}:{secs:02d}"
+
             if total_duration:
-                total_td = timedelta(seconds=int(total_duration))
-                hours, remainder = divmod(total_td.seconds, 3600)
-                minutes, seconds = divmod(remainder, 60)
-                stats["total_time"] = f"{hours}:{minutes:02d}:{seconds:02d}"
+                stats["total_time"] = format_duration(int(total_duration))
             else:
                 stats["total_time"] = "0:00:00"
 
@@ -457,12 +463,9 @@ class MoonrakerClient:
             if progress > 0 and print_duration > 0:
                 estimated_total = print_duration / progress
                 remaining = estimated_total - print_duration
-                remaining_td = timedelta(seconds=int(remaining))
-                hours, remainder = divmod(remaining_td.seconds, 3600)
-                minutes, seconds = divmod(remainder, 60)
-                stats["estimate"] = f"{hours}:{minutes:02d}:{seconds:02d}"
+                stats["estimate"] = format_duration(int(remaining))
 
-                eta_time = datetime.now() + remaining_td
+                eta_time = datetime.now() + timedelta(seconds=int(remaining))
                 stats["eta"] = eta_time.strftime("%I:%M %p")
             else:
                 stats["estimate"] = "Calculating..."
@@ -470,10 +473,7 @@ class MoonrakerClient:
 
             if progress > 0 and print_duration > 0:
                 estimated_total = print_duration / progress
-                total_td = timedelta(seconds=int(estimated_total))
-                hours, remainder = divmod(total_td.seconds, 3600)
-                minutes, seconds = divmod(remainder, 60)
-                stats["slicer_time"] = f"{hours}:{minutes:02d}:{seconds:02d}"
+                stats["slicer_time"] = format_duration(int(estimated_total))
             else:
                 stats["slicer_time"] = "N/A"
 
@@ -704,12 +704,19 @@ class YouTubeStreamer:
         else:
             lines.append("Statistics will be updated as the print progresses...")
 
+        # Use stream start time if available, otherwise current time
+        start_time_str = "Unknown"
+        if self.live_broadcast and self.live_broadcast.get("snippet", {}).get("scheduledStartTime"):
+            start_time_str = self.live_broadcast["snippet"]["scheduledStartTime"]
+        else:
+            start_time_str = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+
         lines.extend(
             [
                 "",
                 "━" * 40,
                 "🔴 Live from Klipper 3D Printer",
-                f"⏱️  Started at: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}",
+                f"⏱️  Started at: {start_time_str}",
             ]
         )
 
@@ -1897,11 +1904,12 @@ This timelapse was automatically generated using Moonraker Timelapse plugin and 
         logger.info(f"HTTP API print state: {current_state}")
         logger.info(f"WebSocket print state: {self.moonraker.print_state}")
 
-        # Use WebSocket state if HTTP returns unknown (more reliable)
+        # Use WebSocket state if available (more reliable for real-time state)
         effective_state = current_state
-        if current_state == "unknown" and self.moonraker.print_state != "unknown":
+        if self.moonraker.print_state != "unknown":
             effective_state = self.moonraker.print_state
-            logger.info(f"Using WebSocket state instead of HTTP: {effective_state}")
+            if current_state != effective_state:
+                logger.info(f"Using WebSocket state ({effective_state}) instead of HTTP ({current_state})")
 
         if effective_state == "printing":
             filename = (
@@ -1919,9 +1927,11 @@ This timelapse was automatically generated using Moonraker Timelapse plugin and 
                 self.moonraker.current_file = filename
                 self.moonraker._initial_state_handled = True
                 self.on_print_started(filename)
-        elif effective_state and effective_state != "unknown":
-            logger.info(f"Print not active, current state: {effective_state}")
-            self.moonraker.print_state = effective_state
+        elif effective_state and effective_state not in ["unknown", "standby"]:
+            # Only update state from HTTP if WebSocket hasn't provided state yet
+            if self.moonraker.print_state == "unknown":
+                logger.info(f"Print not active, current state: {effective_state}")
+                self.moonraker.print_state = effective_state
 
         reconnect_thread = self.moonraker.start_reconnection_loop()
 
