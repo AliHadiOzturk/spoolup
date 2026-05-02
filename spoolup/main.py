@@ -685,6 +685,16 @@ class YouTubeStreamer:
             chamber_temp = print_stats.get("chamber_temp", "N/A")
             mcu_temp = print_stats.get("mcu_temp", "N/A")
 
+            # Calculate progress for progress bar
+            progress_pct = 0.0
+            if isinstance(total_layers, (int, float)) and total_layers > 0:
+                progress_pct = (current_layer / total_layers) * 100 if isinstance(current_layer, (int, float)) else 0.0
+            
+            # Build visual progress bar
+            bar_width = 30
+            filled = int((progress_pct / 100) * bar_width)
+            progress_bar = "█" * filled + "░" * (bar_width - filled)
+            
             # Format statistics in a table-like layout
             lines.extend(
                 [
@@ -695,10 +705,12 @@ class YouTubeStreamer:
                     f"Filament:     {filament}",
                     f"Layer:        {current_layer} of {total_layers}",
                     "",
-                    f"Estimate:     {estimate}",
-                    f"Slicer:       {slicer_time}",
-                    f"Total:        {total_time}",
+                    f"Progress:     {progress_pct:.1f}%",
+                    f"[{progress_bar}]",
+                    f"Elapsed:      {total_time}",
+                    f"Remaining:    {estimate}",
                     f"ETA:          {eta}",
+                    f"Slicer Est:   {slicer_time}",
                 ]
             )
         else:
