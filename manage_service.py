@@ -718,6 +718,14 @@ class WindowsServiceManager(BaseServiceManager):
     def _get_log_file(self) -> Path:
         return self.install_dir / "spoolup.log"
         
+    def _is_admin(self) -> bool:
+        """Check if running with administrator privileges"""
+        try:
+            import ctypes
+            return ctypes.windll.shell32.IsUserAnAdmin()
+        except Exception:
+            return False
+        
     def _task_exists(self) -> bool:
         """Check if scheduled task exists"""
         try:
@@ -748,6 +756,10 @@ class WindowsServiceManager(BaseServiceManager):
             
     def start(self) -> bool:
         """Start service"""
+        if not self._task_exists():
+            log("Service is not installed. Run 'install' first.", "error")
+            return False
+            
         try:
             run_cmd(["schtasks", "/run", "/tn", self.task_name])
             log("Service started successfully", "success")
@@ -758,6 +770,10 @@ class WindowsServiceManager(BaseServiceManager):
             
     def stop(self) -> bool:
         """Stop service"""
+        if not self._task_exists():
+            log("Service is not installed.", "error")
+            return False
+            
         try:
             run_cmd(["schtasks", "/end", "/tn", self.task_name])
             log("Service stopped successfully", "success")
@@ -779,6 +795,10 @@ class WindowsServiceManager(BaseServiceManager):
             
     def enable(self) -> bool:
         """Enable service on boot"""
+        if not self._task_exists():
+            log("Service is not installed.", "error")
+            return False
+            
         try:
             run_cmd(["schtasks", "/change", "/tn", self.task_name, "/ENABLE"])
             log("Service enabled to start on boot", "success")
@@ -789,6 +809,10 @@ class WindowsServiceManager(BaseServiceManager):
             
     def disable(self) -> bool:
         """Disable service on boot"""
+        if not self._task_exists():
+            log("Service is not installed.", "error")
+            return False
+            
         try:
             run_cmd(["schtasks", "/change", "/tn", self.task_name, "/DISABLE"])
             log("Service disabled from starting on boot", "success")
@@ -820,6 +844,16 @@ class WindowsServiceManager(BaseServiceManager):
             log("Service is already installed. Use 'update' to reinstall.", "warning")
             return False
             
+        # Check for admin privileges
+        is_admin = self._is_admin()
+        if not is_admin:
+            log("Administrator privileges required for system-wide installation.", "warning")
+            log("Please run as Administrator or the service will run as current user only.", "warning")
+            use_current_user = input("Install for current user only? [Y/n]: ").lower() != 'n'
+            if not use_current_user:
+                log("Installation cancelled. Please run as Administrator.", "error")
+                return False
+        
         try:
             # Create batch file to run the service
             batch_file = self.install_dir / "run_spoolup.bat"
@@ -832,18 +866,36 @@ cd /d "{self.install_dir}"
                 f.write(batch_content)
                 
             # Create scheduled task
-            create_cmd = [
-                "schtasks", "/create",
-                "/tn", self.task_name,
-                "/tr", f'"{batch_file}"',
-                "/sc", "onstart",
-                "/ru", "SYSTEM",
-                "/rl", "HIGHEST",
-                "/f"
-            ]
+            if is_admin:
+                # System-wide task with highest privileges
+                create_cmd = [
+                    "schtasks", "/create",
+                    "/tn", self.task_name,
+                    "/tr", f'"{batch_file}"',
+                    "/sc", "onstart",
+                    "/ru", "SYSTEM",
+                    "/rl", "HIGHEST",
+                    "/f"
+                ]
+            else:
+                # User-level task (runs when user logs in)
+                create_cmd = [
+                    "schtasks", "/create",
+                    "/tn", self.task_name,
+                    "/tr", f'"{batch_file}"',
+                    "/sc", "onlogon",
+                    "/f"
+                ]
             
-            run_cmd(create_cmd)
+            code, stdout, stderr = run_cmd(create_cmd, check=False)
+            if code != 0:
+                error_msg = stderr or stdout or "Unknown error"
+                log(f"schtasks failed: {error_msg}", "error")
+                return False
+                
             log("Windows scheduled task installed successfully", "success")
+            if not is_admin:
+                log("Note: Service will run when you log in (user-level)", "info")
             return True
             
         except Exception as e:
@@ -856,13 +908,21 @@ cd /d "{self.install_dir}"
         
         try:
             # Stop service first
-            self.stop()
+            if self._task_exists():
+                self.stop()
             
             # Remove scheduled task
             if self._task_exists():
-                run_cmd(["schtasks", "/delete", "/tn", self.task_name, "/f"])
-                log("Windows scheduled task removed", "success")
-                
+                code, stdout, stderr = run_cmd(
+                    ["schtasks", "/delete", "/tn", self.task_name, "/f"],
+                    check=False
+                )
+                if code == 0:
+                    log("Windows scheduled task removed", "success")
+                else:
+                    error_msg = stderr or stdout or "Unknown error"
+                    log(f"Failed to remove task: {error_msg}", "error")
+                    
             # Optionally remove installation directory
             if self.install_dir.exists() and input(f"\nRemove installation directory {self.install_dir}? [y/N]: ").lower() == 'y':
                 shutil.rmtree(self.install_dir)
