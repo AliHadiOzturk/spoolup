@@ -22,7 +22,7 @@ import threading
 import tempfile
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any, Callable
+from typing import Optional, Dict, Any, Callable, List
 
 import requests
 import urllib3
@@ -532,6 +532,89 @@ class YouTubeStreamer:
             return True
         except (subprocess.CalledProcessError, FileNotFoundError):
             return False
+
+    def _detect_h264_encoder(self) -> str:
+        """Detect best available H.264 encoder. Falls back from hardware to software."""
+        try:
+            result = subprocess.run(
+                ["ffmpeg", "-hide_banner", "-encoders"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=10,
+            )
+            encoders = result.stdout
+        except Exception as e:
+            logger.warning(f"Could not detect encoders: {e}")
+            return "libx264"
+
+        # Priority: Intel QSV > Apple VideoToolbox > Rockchip MPP > NVIDIA NVENC > software
+        preferred = [
+            ("h264_qsv", "Intel QuickSync"),
+            ("h264_videotoolbox", "Apple VideoToolbox"),
+            ("h264_rkmpp", "Rockchip MPP"),
+            ("h264_nvenc", "NVIDIA NVENC"),
+            ("h264_vaapi", "VAAPI"),
+            ("h264_amf", "AMD AMF"),
+        ]
+
+        for encoder, name in preferred:
+            if encoder in encoders:
+                logger.info(f"Using hardware encoder: {name} ({encoder})")
+                return encoder
+
+        logger.info("Using software encoder: libx264")
+        return "libx264"
+
+    def _build_ffmpeg_cmd(self, webcam_url: str) -> List[str]:
+        """Build FFmpeg command with optimal settings for YouTube streaming."""
+        resolution = self.config.get("stream_resolution") or "1280x720"
+        fps: int = self.config.get("stream_fps") or 30
+        bitrate: str = self.config.get("stream_bitrate") or "4000k"
+        buffer_size: str = self.config.get("stream_buffer_size") or "8000k"
+        encoder = self._detect_h264_encoder()
+
+        # YouTube prefers 2-second GOP (Group of Pictures)
+        gop_size = fps * 2
+
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel", "warning",
+            # Input flags: allow some buffering for network streams but discard corrupt frames
+            "-fflags", "+discardcorrupt",
+            "-f", "mjpeg",
+            "-i", webcam_url,
+            # Silent audio source (required by YouTube)
+            "-f", "lavfi",
+            "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+            # Video filter: enforce framerate, scale, pixel format
+            "-filter_complex",
+            f"[0:v]fps={fps},scale={resolution},format=yuv420p[v]",
+            "-map", "[v]",
+            "-map", "1:a",
+            # Video encoding
+            "-c:v", encoder,
+            "-b:v", bitrate,
+            "-maxrate", bitrate,
+            "-bufsize", buffer_size,
+            "-g", str(gop_size),
+            "-keyint_min", str(gop_size),
+            "-sc_threshold", "0",
+            "-preset", "veryfast" if encoder == "libx264" else "fast",
+            "-pix_fmt", "yuv420p",
+            "-threads", "0",
+            # Audio encoding
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-ar", "44100",
+            # Output format
+            "-f", "flv",
+            self.stream_url,
+        ]
+
+        logger.info(f"FFmpeg command: {' '.join(cmd)}")
+        return cmd
 
     def _map_resolution_to_youtube_format(self, resolution: str) -> str:
         resolution_map = {
@@ -1063,6 +1146,9 @@ class YouTubeStreamer:
 
             time.sleep(3)
 
+            # Reload config to pick up any changes
+            self.config.load()
+
             webcam_url = (
                 self.config.get("webcam_url") or "http://localhost:8080/?action=stream"
             )
@@ -1072,56 +1158,7 @@ class YouTubeStreamer:
                 logger.error("Cannot restart - no stream URL available")
                 return
 
-            resolution = self.config.get("stream_resolution") or "854x480"
-            fps = self.config.get("stream_fps") or 15
-            bitrate = self.config.get("stream_bitrate") or "2000k"
-            buffer_size = self.config.get("stream_buffer_size") or "2000k"
-
-            cmd = [
-                "ffmpeg",
-                "-hide_banner",
-                "-loglevel",
-                "warning",
-                "-fflags",
-                "nobuffer",
-                "-analyzeduration",
-                "0",
-                "-fflags",
-                "+discardcorrupt",
-                "-f",
-                "mjpeg",
-                "-i",
-                webcam_url,
-                "-f",
-                "lavfi",
-                "-i",
-                "anullsrc=channel_layout=stereo:sample_rate=44100",
-                "-filter_complex",
-                f"[0:v]fps={fps},scale={resolution},format=yuv420p[v]",
-                "-map",
-                "[v]",
-                "-map",
-                "1:a",
-                "-c:v",
-                "h264_qsv",
-                "-b:v",
-                bitrate,
-                "-maxrate",
-                bitrate,
-                "-bufsize",
-                buffer_size,
-                "-g",
-                str(fps),
-                "-threads",
-                "0",
-                "-c:a",
-                "aac",
-                "-b:a",
-                "128k",
-                "-f",
-                "flv",
-                self.stream_url,
-            ]
+            cmd = self._build_ffmpeg_cmd(webcam_url)
 
             self.ffmpeg_process = subprocess.Popen(
                 cmd,
@@ -1256,58 +1293,8 @@ class YouTubeStreamer:
         self._test_rtmp_connectivity()
 
         try:
-            resolution: str = self.config.get("stream_resolution") or "1280x720"
-            fps: int = self.config.get("stream_fps") or 30
-            bitrate: str = self.config.get("stream_bitrate") or "4000k"
-            buffer_size: str = self.config.get("stream_buffer_size") or "4000k"
-
-            cmd = [
-                "ffmpeg",
-                "-hide_banner",
-                "-loglevel",
-                "warning",
-                "-fflags",
-                "nobuffer",
-                "-analyzeduration",
-                "0",
-                "-fflags",
-                "+discardcorrupt",
-                "-f",
-                "mjpeg",
-                "-i",
-                webcam_url,
-                "-f",
-                "lavfi",
-                "-i",
-                "anullsrc=channel_layout=stereo:sample_rate=44100",
-                "-filter_complex",
-                f"[0:v]fps={fps},scale={resolution},format=yuv420p[v]",
-                "-map",
-                "[v]",
-                "-map",
-                "1:a",
-                "-c:v",
-                "h264_qsv",
-                "-b:v",
-                bitrate,
-                "-maxrate",
-                bitrate,
-                "-bufsize",
-                buffer_size,
-                "-g",
-                str(fps),
-                "-threads",
-                "0",
-                "-c:a",
-                "aac",
-                "-b:a",
-                "128k",
-                "-f",
-                "flv",
-                self.stream_url,
-            ]
-
-            logger.info(f"Starting FFmpeg stream (video only): {' '.join(cmd)}")
+            cmd = self._build_ffmpeg_cmd(webcam_url)
+            logger.info(f"Starting FFmpeg stream: {' '.join(cmd)}")
 
             self.ffmpeg_process = subprocess.Popen(
                 cmd,
