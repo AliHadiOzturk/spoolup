@@ -597,10 +597,9 @@ class YouTubeStreamer:
                 "-x264-params", f"sc_threshold=0:min-keyint={gop_size}",
             ])
         elif encoder == "h264_qsv":
-            # QSV-specific: enable CBR and disable lookahead for lower latency
+            # QSV-specific: use CBR mode
             video_opts.extend([
-                "-look_ahead", "0",
-                "-qsv_preset", "fast",
+                "-preset", "fast",
             ])
         elif encoder == "h264_nvenc":
             video_opts.extend([
@@ -1340,6 +1339,9 @@ class YouTubeStreamer:
                 logger.error(
                     f"FFmpeg failed to start (process exited with code {exit_code})"
                 )
+                
+                # Try to read stderr for error details
+                stderr_output = ""
                 if self.ffmpeg_process.stderr:
                     try:
                         stderr_output = self.ffmpeg_process.stderr.read()
@@ -1349,7 +1351,37 @@ class YouTubeStreamer:
                             )
                     except Exception as e:
                         logger.debug(f"Could not read FFmpeg stderr: {e}")
-                return False
+                
+                # If hardware encoder failed, fallback to libx264
+                if "h264_" in cmd[cmd.index("-c:v") + 1] and "libx264" not in cmd:
+                    logger.warning("Hardware encoder failed, falling back to libx264")
+                    # Override encoder detection to force software encoding
+                    original_detect = self._detect_h264_encoder
+                    self._detect_h264_encoder = lambda: "libx264"
+                    
+                    try:
+                        cmd = self._build_ffmpeg_cmd(webcam_url)
+                        logger.info(f"Retrying with software encoder: {' '.join(cmd)}")
+                        
+                        self.ffmpeg_process = subprocess.Popen(
+                            cmd,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.PIPE,
+                            bufsize=1,
+                            universal_newlines=True,
+                        )
+                        
+                        self._start_ffmpeg_stderr_logger()
+                        
+                        time.sleep(5)
+                        if self.ffmpeg_process.poll() is not None:
+                            logger.error("Software encoder also failed")
+                            return False
+                    finally:
+                        # Restore original detection method
+                        self._detect_h264_encoder = original_detect
+                else:
+                    return False
 
             if self.live_stream and self.live_broadcast:
                 stream_id = self.live_stream["id"]
