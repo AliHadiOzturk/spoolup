@@ -69,10 +69,10 @@ class Config:
         "timelapse_dir": os.path.join(tempfile.gettempdir(), "spoolup", "timelapse"),
         "client_secrets_file": "client_secrets.json",
         "token_file": "youtube_token.json",
-        "stream_resolution": "854x480",
-        "stream_fps": 15,
-        "stream_bitrate": "2000k",
-        "stream_buffer_size": "2000k",
+        "stream_resolution": "1280x720",
+        "stream_fps": 30,
+        "stream_bitrate": "4500k",
+        "stream_buffer_size": "9000k",
         "timelapse_mode": "local",
         "printer_ip": "",
         "moonraker_port": "4409",
@@ -577,6 +577,41 @@ class YouTubeStreamer:
         # YouTube prefers 2-second GOP (Group of Pictures)
         gop_size = fps * 2
 
+        # Build encoder-specific options
+        video_opts = [
+            "-c:v", encoder,
+            "-b:v", bitrate,
+            "-maxrate", bitrate,
+            "-minrate", bitrate,
+            "-bufsize", buffer_size,
+            "-g", str(gop_size),
+            "-keyint_min", str(gop_size),
+            "-pix_fmt", "yuv420p",
+        ]
+
+        # Add encoder-specific flags
+        if encoder == "libx264":
+            video_opts.extend([
+                "-preset", "veryfast",
+                "-tune", "zerolatency",
+                "-x264-params", f"sc_threshold=0:min-keyint={gop_size}",
+            ])
+        elif encoder == "h264_qsv":
+            # QSV-specific: enable CBR and disable lookahead for lower latency
+            video_opts.extend([
+                "-look_ahead", "0",
+                "-qsv_preset", "fast",
+            ])
+        elif encoder == "h264_nvenc":
+            video_opts.extend([
+                "-preset", "p4",
+                "-tune", "ll",
+            ])
+        elif encoder == "h264_videotoolbox":
+            video_opts.extend([
+                "-realtime", "1",
+            ])
+
         cmd = [
             "ffmpeg",
             "-hide_banner",
@@ -588,21 +623,14 @@ class YouTubeStreamer:
             # Silent audio source (required by YouTube)
             "-f", "lavfi",
             "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
-            # Video filter: enforce framerate, scale, pixel format
+            # Video filter: enforce framerate (round=down avoids duplicating frames),
+            # scale to target resolution, ensure YUV420P for compatibility
             "-filter_complex",
-            f"[0:v]fps={fps},scale={resolution},format=yuv420p[v]",
+            f"[0:v]fps={fps}:round=down,scale={resolution},format=yuv420p[v]",
             "-map", "[v]",
             "-map", "1:a",
-            # Video encoding
-            "-c:v", encoder,
-            "-b:v", bitrate,
-            "-maxrate", bitrate,
-            "-bufsize", buffer_size,
-            "-g", str(gop_size),
-            "-keyint_min", str(gop_size),
-            "-sc_threshold", "0",
-            "-preset", "veryfast" if encoder == "libx264" else "fast",
-            "-pix_fmt", "yuv420p",
+            # Video encoding options
+            *video_opts,
             "-threads", "0",
             # Audio encoding
             "-c:a", "aac",
