@@ -138,6 +138,7 @@ class MoonrakerClient:
         self._last_ping_time = 0.0
         self._ping_interval = 30.0
         self._temperatures: Dict[str, float] = {}
+        self._display_progress: float = 0.0
 
     def connect_websocket(self):
         try:
@@ -202,7 +203,17 @@ class MoonrakerClient:
         self._subscription_pending = True
         self._subscription_msg_id = self._send_jsonrpc(
             "printer.objects.subscribe",
-            {"objects": {"print_stats": None, "virtual_sdcard": None}},
+            {
+                "objects": {
+                    "print_stats": None,
+                    "virtual_sdcard": None,
+                    "toolhead": None,
+                    "extruder": None,
+                    "heater_bed": None,
+                    "display_status": None,
+                    "gcode_move": None,
+                }
+            },
         )
 
     def _on_message(self, ws, message):
@@ -312,6 +323,7 @@ class MoonrakerClient:
                     )
 
         self._extract_temperatures(status)
+        self._extract_display_status(status)
 
     def _extract_temperatures(self, status: dict):
         temp_keys = [
@@ -326,6 +338,13 @@ class MoonrakerClient:
                 obj = status[key]
                 if "temperature" in obj:
                     self._temperatures[key] = obj["temperature"]
+
+    def _extract_display_status(self, status: dict):
+        """Extract display_status (progress) from status update."""
+        if "display_status" in status:
+            display = status["display_status"]
+            if "progress" in display:
+                self._display_progress = display["progress"]
 
     def get_temperatures(self) -> Dict[str, float]:
         return self._temperatures.copy()
@@ -408,17 +427,21 @@ class MoonrakerClient:
         """Fetch comprehensive print statistics for broadcast description."""
         stats = {}
         try:
+            # Moonraker expects query params as ?object1&object2 (no values)
+            # Use list of tuples to ensure proper URL encoding
+            query_params = [
+                ("print_stats", ""),
+                ("virtual_sdcard", ""),
+                ("toolhead", ""),
+                ("extruder", ""),
+                ("heater_bed", ""),
+                ("display_status", ""),
+                ("temperature_sensor chamber", ""),
+                ("temperature_sensor mcu", ""),
+            ]
             response = requests.get(
                 f"{self.base_url}/printer/objects/query",
-                params={
-                    "print_stats": None,
-                    "virtual_sdcard": None,
-                    "toolhead": None,
-                    "extruder": None,
-                    "heater_bed": None,
-                    "temperature_sensor chamber": None,
-                    "temperature_sensor mcu": None,
-                },
+                params=query_params,
                 timeout=10,
             )
             response.raise_for_status()
@@ -430,6 +453,7 @@ class MoonrakerClient:
             toolhead = status.get("toolhead", {})
             extruder = status.get("extruder", {})
             heater_bed = status.get("heater_bed", {})
+            display_status = status.get("display_status", {})
 
             speed = toolhead.get("speed", 0)
             stats["speed"] = f"{speed:.0f} mm/s" if speed else "100 mm/s"
@@ -439,8 +463,10 @@ class MoonrakerClient:
                 f"{filament_mm / 1000:.2f} m" if filament_mm else "0.00 m"
             )
 
-            current_layer = virtual_sdcard.get("layer", 0)
-            total_layers = virtual_sdcard.get("layer_count", 0)
+            # Layer info is in print_stats.info, not virtual_sdcard
+            print_info = print_stats.get("info", {})
+            current_layer = print_info.get("current_layer", 0)
+            total_layers = print_info.get("total_layer", 0)
             stats["current_layer"] = current_layer if current_layer else 0
             stats["total_layers"] = total_layers if total_layers else 0
 
@@ -459,7 +485,8 @@ class MoonrakerClient:
             else:
                 stats["total_time"] = "0:00:00"
 
-            progress = virtual_sdcard.get("progress", 0)
+            # Progress comes from display_status, not virtual_sdcard
+            progress = display_status.get("progress", 0)
             if progress > 0 and print_duration > 0:
                 estimated_total = print_duration / progress
                 remaining = estimated_total - print_duration
@@ -476,6 +503,9 @@ class MoonrakerClient:
                 stats["slicer_time"] = format_duration(int(estimated_total))
             else:
                 stats["slicer_time"] = "N/A"
+
+            # Store raw progress for description updates
+            stats["progress"] = progress
 
             temps = self._temperatures
 
@@ -797,7 +827,13 @@ class YouTubeStreamer:
 
             # Calculate progress for progress bar
             progress_pct = 0.0
-            if isinstance(total_layers, (int, float)) and total_layers > 0:
+            # Use display_status.progress (0.0-1.0) if available
+            if hasattr(self, '_display_progress') and self._display_progress > 0:
+                progress_pct = self._display_progress * 100
+            # Fallback to stats progress field
+            elif "progress" in print_stats and print_stats["progress"] > 0:
+                progress_pct = print_stats["progress"] * 100
+            elif isinstance(total_layers, (int, float)) and total_layers > 0:
                 progress_pct = (current_layer / total_layers) * 100 if isinstance(current_layer, (int, float)) else 0.0
             
             # Build visual progress bar
