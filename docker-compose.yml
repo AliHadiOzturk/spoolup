@@ -1,0 +1,46 @@
+version: "3.8"
+
+services:
+  vms:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: video-management-system
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-change-this-to-a-secure-random-string}
+      - DATABASE_URL=sqlite:///data/vms.db
+      - MOONRAKER_URL=${MOONRAKER_URL:-http://your-printer-ip:4409}
+      - MOONRAKER_API_KEY=${MOONRAKER_API_KEY:-}
+      - YOUTUBE_CLIENT_SECRETS=${YOUTUBE_CLIENT_SECRETS:-}
+      - YOUTUBE_TOKEN_FILE=data/youtube_token.json
+      - TIKTOK_CLIENT_KEY=${TIKTOK_CLIENT_KEY:-}
+      - TIKTOK_CLIENT_SECRET=${TIKTOK_CLIENT_SECRET:-}
+      - FFMPEG_PATH=ffmpeg
+      - MAX_VIDEO_DURATION=60
+      - OUTPUT_RESOLUTION=1080x1920
+      - HOST=0.0.0.0
+      - PORT=8000
+      - ANALYTICS_SYNC_HOUR=0
+      - ANALYTICS_SYNC_MINUTE=0
+      # Security (IMPORTANT for public servers!)
+      - ALLOW_REGISTRATION=${ALLOW_REGISTRATION:-false}
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      - MAX_LOGIN_ATTEMPTS=5
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./uploads:/app/uploads
+      # Mount your YouTube client secrets file (optional)
+      # - ./client_secrets.json:/app/client_secrets.json:ro
+    networks:
+      - vms-network
+    # If you need to access printers on your local network
+    # network_mode: host
+
+networks:
+  vms-network:
+    driver: bridge

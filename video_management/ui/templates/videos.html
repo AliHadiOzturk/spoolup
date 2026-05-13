@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+
+{% block title %}Videos - Video Management System{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Videos</h1>
+    <p>Manage your recorded timelapse videos</p>
+</div>
+
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+        <div>
+            <h2 style="font-size: 1.25rem; font-weight: 600;">All Videos</h2>
+            <p style="color: var(--text-secondary); font-size: 0.875rem; margin-top: 0.25rem;">
+                <span id="video-count">Loading...</span>
+            </p>
+        </div>
+        <button class="btn btn-secondary" onclick="window.location.reload()">
+            <span>Refresh</span>
+        </button>
+    </div>
+    <div id="videos-container">
+        <div class="loading-skeleton" style="height: 200px;"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+class VideosManager {
+    constructor() {
+        this.loadVideos();
+    }
+
+    async loadVideos() {
+        try {
+            const response = await window.app.apiRequest('/api/videos');
+            if (!response) return;
+
+            const videos = await response.json();
+            this.renderVideos(videos);
+        } catch (err) {
+            console.error('Failed to load videos:', err);
+            document.getElementById('videos-container').innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-state-icon">⚠️</div>
+                    <p>Failed to load videos</p>
+                </div>
+            `;
+        }
+    }
+
+    renderVideos(videos) {
+        const container = document.getElementById('videos-container');
+        const countEl = document.getElementById('video-count');
+        
+        countEl.textContent = `${videos.length} video${videos.length !== 1 ? 's' : ''} found`;
+        
+        if (videos.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-state-icon">🎥</div>
+                    <h3 style="margin-bottom: 0.5rem;">No videos yet</h3>
+                    <p style="margin-bottom: 1rem;">Sync your printer to import timelapse videos</p>
+                    <a href="/printers" class="btn btn-primary">Go to Printers</a>
+                </div>
+            `;
+            return;
+        }
+
+        container.innerHTML = `
+            <div class="table-container">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Filename</th>
+                            <th>Size</th>
+                            <th>Modified</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${videos.map(video => `
+                            <tr class="fade-in">
+                                <td>
+                                    <div class="filename-cell" title="${this.escapeHtml(video.filename)}">
+                                        ${this.getFileIcon(video.filename)} ${this.escapeHtml(video.filename)}
+                                    </div>
+                                </td>
+                                <td>${window.app.formatFileSize(video.size_bytes)}</td>
+                                <td>${this.formatDate(video.created_at)}</td>
+                                <td>
+                                    <a href="/videos/${video.id}" class="btn btn-primary btn-sm">View</a>
+                                </td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
+        `;
+    }
+
+    getFileIcon(filename) {
+        if (filename.endsWith('.mp4')) return '🎬';
+        if (filename.endsWith('.jpg') || filename.endsWith('.jpeg') || filename.endsWith('.png')) return '🖼️';
+        if (filename.endsWith('.zip')) return '📦';
+        return '📄';
+    }
+
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    formatDate(dateString) {
+        const date = new Date(dateString);
+        const now = new Date();
+        const diffMs = now - date;
+        const diffMins = Math.floor(diffMs / 60000);
+        const diffHours = Math.floor(diffMs / 3600000);
+        const diffDays = Math.floor(diffMs / 86400000);
+
+        if (diffMins < 1) return 'Just now';
+        if (diffMins < 60) return `${diffMins}m ago`;
+        if (diffHours < 24) return `${diffHours}h ago`;
+        if (diffDays < 7) return `${diffDays}d ago`;
+        
+        return date.toLocaleDateString('en-US', { 
+            month: 'short', 
+            day: 'numeric',
+            year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined
+        });
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    new VideosManager();
+});
+</script>
+{% endblock %}

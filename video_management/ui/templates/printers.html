@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+
+{% block title %}Printers - Video Management System{% endblock %}
+
+{% block content %}
+<h1>Printers</h1>
+<p style="color: var(--text-secondary); margin-bottom: 1.5rem;">
+    Manage your 3D printer connections
+</p>
+
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <h2>Connected Printers</h2>
+        <button class="btn btn-primary" onclick="showAddPrinterModal()">
+            Add Printer
+        </button>
+    </div>
+    <div id="printers-container">
+        <p style="color: var(--text-secondary);">Loading printers...</p>
+    </div>
+</div>
+
+<!-- Add Printer Modal -->
+<div id="add-printer-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000;">
+    <div style="background: white; max-width: 500px; margin: 5rem auto; padding: 2rem; border-radius: 8px;">
+        <h2>Add Printer</h2>
+        <form id="add-printer-form">
+            <div class="form-group">
+                <label class="form-label">Name</label>
+                <input type="text" id="printer-name" class="form-control" required>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Moonraker URL</label>
+                <input type="url" id="printer-url" class="form-control" placeholder="http://192.168.1.100:4409" required>
+            </div>
+            <div class="form-group">
+                <label class="form-label">API Key (optional)</label>
+                <input type="text" id="printer-api-key" class="form-control">
+            </div>
+            <div style="display: flex; gap: 1rem;">
+                <button type="submit" class="btn btn-primary">Add</button>
+                <button type="button" class="btn" onclick="hideAddPrinterModal()" style="background: var(--border-color);">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+class PrintersManager {
+    constructor() {
+        this.loadPrinters();
+        this.setupEventListeners();
+    }
+
+    setupEventListeners() {
+        const form = document.getElementById('add-printer-form');
+        if (form) {
+            form.addEventListener('submit', (e) => this.handleAddPrinter(e));
+        }
+    }
+
+    async loadPrinters() {
+        try {
+            const response = await window.app.apiRequest('/api/printers');
+            if (!response) return;
+
+            const printers = await response.json();
+            this.renderPrinters(printers);
+        } catch (err) {
+            console.error('Failed to load printers:', err);
+        }
+    }
+
+    renderPrinters(printers) {
+        const container = document.getElementById('printers-container');
+        if (printers.length === 0) {
+            container.innerHTML = '<p style="color: var(--text-secondary);">No printers configured</p>';
+            return;
+        }
+
+        container.innerHTML = `
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>URL</th>
+                        <th>Videos</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${printers.map(printer => `
+                        <tr>
+                            <td>${printer.name}</td>
+                            <td>${printer.moonraker_url}</td>
+                            <td>${printer.video_count}</td>
+                            <td><span class="badge badge-${printer.is_active ? 'success' : 'error'}">${printer.is_active ? 'Active' : 'Inactive'}</span></td>
+                            <td>
+                                <button class="btn btn-primary btn-sm" onclick="syncPrinter(${printer.id})">Sync</button>
+                                <button class="btn btn-danger btn-sm" onclick="deletePrinter(${printer.id})">Delete</button>
+                            </td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        `;
+    }
+
+    async handleAddPrinter(e) {
+        e.preventDefault();
+        const name = document.getElementById('printer-name').value;
+        const url = document.getElementById('printer-url').value;
+        const apiKey = document.getElementById('printer-api-key').value;
+
+        try {
+            const response = await window.app.apiRequest('/api/printers', {
+                method: 'POST',
+                body: JSON.stringify({ name, moonraker_url: url, api_key: apiKey })
+            });
+
+            if (response.ok) {
+                hideAddPrinterModal();
+                this.loadPrinters();
+                window.app.showAlert('Printer added successfully', 'success');
+            } else {
+                const error = await response.json();
+                window.app.showAlert(error.detail || 'Failed to add printer', 'error');
+            }
+        } catch (err) {
+            window.app.showAlert('Network error', 'error');
+        }
+    }
+}
+
+function showAddPrinterModal() {
+    document.getElementById('add-printer-modal').style.display = 'block';
+}
+
+function hideAddPrinterModal() {
+    document.getElementById('add-printer-modal').style.display = 'none';
+}
+
+async function syncPrinter(printerId) {
+    try {
+        const response = await window.app.apiRequest(`/api/printers/${printerId}/sync`, {
+            method: 'POST'
+        });
+
+        if (response.ok) {
+            window.app.showAlert('Sync initiated', 'success');
+        } else {
+            const error = await response.json();
+            window.app.showAlert(error.detail || 'Sync failed', 'error');
+        }
+    } catch (err) {
+        window.app.showAlert('Network error', 'error');
+    }
+}
+
+async function deletePrinter(printerId) {
+    if (!confirm('Are you sure you want to delete this printer?')) return;
+
+    try {
+        const response = await window.app.apiRequest(`/api/printers/${printerId}`, {
+            method: 'DELETE'
+        });
+
+        if (response.ok) {
+            window.app.showAlert('Printer deleted', 'success');
+            location.reload();
+        } else {
+            const error = await response.json();
+            window.app.showAlert(error.detail || 'Delete failed', 'error');
+        }
+    } catch (err) {
+        window.app.showAlert('Network error', 'error');
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    new PrintersManager();
+});
+</script>
+{% endblock %}

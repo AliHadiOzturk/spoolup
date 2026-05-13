@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+
+{% block title %}{{ video.filename }} - Video Details{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 0.5rem;">
+        <a href="/videos" style="color: var(--text-secondary); text-decoration: none; font-size: 0.875rem;">← Back to Videos</a>
+    </div>
+    <h1>{{ video.filename }}</h1>
+    <p>Video details and processing options</p>
+</div>
+
+<div class="grid">
+    <!-- Video Info Card -->
+    <div class="card">
+        <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">📋 File Information</h2>
+        <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+            <div style="display: flex; justify-content: space-between;">
+                <span style="color: var(--text-secondary);">Filename:</span>
+                <span style="font-weight: 500; word-break: break-all; text-align: right;">{{ video.filename }}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between;">
+                <span style="color: var(--text-secondary);">Size:</span>
+                <span style="font-weight: 500;">{{ "%.2f" | format(video.size_bytes / 1024 / 1024) }} MB</span>
+            </div>
+            <div style="display: flex; justify-content: space-between;">
+                <span style="color: var(--text-secondary);">Created:</span>
+                <span style="font-weight: 500;">{{ video.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between;">
+                <span style="color: var(--text-secondary);">Printer:</span>
+                <span style="font-weight: 500;">{{ video.printer.name if video.printer else 'Unknown' }}</span>
+            </div>
+        </div>
+        <hr style="border: none; border-top: 1px solid var(--border-color); margin: 1.5rem 0;">
+        <div class="video-actions" style="display: flex; gap: 0.75rem;">
+            <a href="{{ video.original_path }}" target="_blank" class="btn btn-primary">
+                Open in Moonraker
+            </a>
+        </div>
+    </div>
+
+    <!-- Processing Options Card -->
+    <div class="card">
+        <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">🎬 Processing</h2>
+        <p style="color: var(--text-secondary); margin-bottom: 1rem;">
+            Convert this timelapse for YouTube Shorts or TikTok.
+        </p>
+        <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+            <button class="btn btn-primary" onclick="processVideo('shorts')">
+                📱 Process for Shorts (9:16)
+            </button>
+            <button class="btn btn-secondary" onclick="processVideo('tiktok')">
+                🎵 Process for TikTok
+            </button>
+        </div>
+        <div id="processing-status" style="margin-top: 1rem;"></div>
+    </div>
+</div>
+
+<!-- Processed Versions Section -->
+<div class="card" style="margin-top: 1.5rem;">
+    <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">✅ Processed Versions</h2>
+    <div id="processed-videos-container">
+        <p style="color: var(--text-secondary);">Loading processed versions...</p>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    window.videoId = {{ video.id }};
+    
+    loadProcessedVersions();
+    
+    window.processVideo = async (platform) => {
+        const statusEl = document.getElementById('processing-status');
+        statusEl.innerHTML = `<div class="alert alert-info">⏳ Processing video... This may take a few minutes.</div>`;
+        
+        try {
+            const response = await window.app.apiRequest(`/api/videos/${window.videoId}/process`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ platform })
+            });
+            
+            if (response && response.ok) {
+                const data = await response.json();
+                statusEl.innerHTML = `<div class="alert alert-success">✅ Processing completed! Video is ready to upload.</div>`;
+                loadProcessedVersions();
+            } else {
+                const error = await response.json();
+                statusEl.innerHTML = `<div class="alert alert-error">❌ ${error.detail || 'Processing failed'}</div>`;
+            }
+        } catch (err) {
+            statusEl.innerHTML = `<div class="alert alert-error">❌ Error: ${err.message}</div>`;
+        }
+    };
+    
+    async function loadProcessedVersions() {
+        const container = document.getElementById('processed-videos-container');
+        try {
+            const response = await window.app.apiRequest(`/api/videos/${window.videoId}/processed`);
+            if (!response) return;
+            
+            const processed = await response.json();
+            
+            if (processed.length === 0) {
+                container.innerHTML = `<div class="empty-state" style="padding: 2rem;">
+                        <p style="color: var(--text-secondary);">No processed versions yet. Click "Process for Shorts" above.</p>
+                    </div>`;
+                return;
+            }
+            
+            container.innerHTML = `
+                <div class="table-container">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>Format</th>
+                                <th>Resolution</th>
+                                <th>Duration</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${processed.map(p => `
+                                <tr>
+                                    <td>${p.format.toUpperCase()}</td>
+                                    <td>${p.width}x${p.height}</td>
+                                    <td>${Math.round(p.duration_seconds)}s</td>
+                                    <td><span class="badge badge-${p.status === 'completed' ? 'success' : 'warning'}">${p.status}</span></td>
+                                    <td>
+                                        ${p.status === 'completed' ? `
+                                            <button class="btn btn-primary btn-sm" onclick="uploadVideo(${p.id}, 'youtube')">Upload to YouTube</button>
+                                            <button class="btn btn-secondary btn-sm" onclick="uploadVideo(${p.id}, 'tiktok')">Upload to TikTok</button>
+                                        ` : '⏳ Processing...'}
+                                    </td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        } catch (err) {
+            console.error('Failed to load processed versions:', err);
+            container.innerHTML = `<p style="color: var(--error-color);">Failed to load processed versions</p>`;
+        }
+    }
+    
+    window.uploadVideo = async (processedId, platform) => {
+        const statusEl = document.getElementById('processing-status');
+        statusEl.innerHTML = `<div class="alert alert-info">⏳ Uploading to ${platform}...</div>`;
+        
+        try {
+            const response = await window.app.apiRequest(`/api/uploads/${platform}/${processedId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    title: '{{ video.filename }}',
+                    description: '3D Print Timelapse',
+                    tags: ['3DPrinting', 'Timelapse']
+                })
+            });
+            
+            if (response && response.ok) {
+                statusEl.innerHTML = `<div class="alert alert-success">✅ Upload started! Check the Uploads page.</div>`;
+                setTimeout(() => {
+                    window.location.href = '/uploads';
+                }, 2000);
+            } else {
+                const error = await response.json();
+                statusEl.innerHTML = `<div class="alert alert-error">❌ ${error.detail || 'Upload failed'}</div>`;
+            }
+        } catch (err) {
+            statusEl.innerHTML = `<div class="alert alert-error">❌ Error: ${err.message}</div>`;
+        }
+    };
+});
+</script>
+{% endblock %}

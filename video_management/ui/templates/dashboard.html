@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Video Management System{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Dashboard</h1>
+    <p>Overview of your video management system</p>
+</div>
+
+<div id="stats-container" class="grid">
+    <div class="card stat-card">
+        <div class="loading-skeleton" style="height: 60px; width: 80px; margin: 0 auto;"></div>
+        <div class="loading-skeleton" style="height: 20px; width: 120px; margin: 10px auto 0;"></div>
+    </div>
+    <div class="card stat-card">
+        <div class="loading-skeleton" style="height: 60px; width: 80px; margin: 0 auto;"></div>
+        <div class="loading-skeleton" style="height: 20px; width: 120px; margin: 10px auto 0;"></div>
+    </div>
+    <div class="card stat-card">
+        <div class="loading-skeleton" style="height: 60px; width: 80px; margin: 0 auto;"></div>
+        <div class="loading-skeleton" style="height: 20px; width: 120px; margin: 10px auto 0;"></div>
+    </div>
+    <div class="card stat-card">
+        <div class="loading-skeleton" style="height: 60px; width: 80px; margin: 0 auto;"></div>
+        <div class="loading-skeleton" style="height: 20px; width: 120px; margin: 10px auto 0;"></div>
+    </div>
+</div>
+
+<div class="grid mt-4">
+    <div class="card">
+        <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">Recent Uploads</h2>
+        <div id="recent-uploads">
+            <div class="loading-skeleton" style="height: 40px; margin-bottom: 0.5rem;"></div>
+            <div class="loading-skeleton" style="height: 40px; margin-bottom: 0.5rem;"></div>
+            <div class="loading-skeleton" style="height: 40px;"></div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">Platform Breakdown</h2>
+        <div id="platform-breakdown">
+            <div class="loading-skeleton" style="height: 100px;"></div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="/static/js/dashboard.js"></script>
+{% endblock %}

@@ -27,8 +27,16 @@ env/
 
 # Configuration and credentials (DO NOT COMMIT)
 config.json
+.env
+.env.local
+.env.*.local
 client_secrets.json
 youtube_token.json
+data/
+uploads/
+*.db
+*.sqlite
+*.sqlite3
 
 # Logs
 *.log
@@ -55,3 +63,7 @@ Thumbs.db
 
 # Sample config is OK to commit
 !config.json.sample
+
+
+.playwright-mcp/
+.plans/

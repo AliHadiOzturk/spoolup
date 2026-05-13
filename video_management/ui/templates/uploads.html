@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+
+{% block title %}Uploads - Video Management System{% endblock %}
+
+{% block content %}
+<h1>Uploads</h1>
+<p style="color: var(--text-secondary); margin-bottom: 1.5rem;">
+    Manage your social media uploads
+</p>
+
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <h2>All Uploads</h2>
+        <select id="platform-filter" class="form-control" style="width: auto;" onchange="filterUploads()">
+            <option value="">All Platforms</option>
+            <option value="youtube">YouTube</option>
+            <option value="tiktok">TikTok</option>
+        </select>
+    </div>
+    <div id="uploads-container">
+        <p style="color: var(--text-secondary);">Loading uploads...</p>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+class UploadsManager {
+    constructor() {
+        this.uploads = [];
+        this.loadUploads();
+    }
+
+    async loadUploads() {
+        try {
+            const response = await window.app.apiRequest('/api/uploads');
+            if (!response) return;
+
+            this.uploads = await response.json();
+            this.renderUploads(this.uploads);
+        } catch (err) {
+            console.error('Failed to load uploads:', err);
+        }
+    }
+
+    renderUploads(uploads) {
+        const container = document.getElementById('uploads-container');
+        if (uploads.length === 0) {
+            container.innerHTML = '<p style="color: var(--text-secondary);">No uploads found</p>';
+            return;
+        }
+
+        container.innerHTML = `
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Platform</th>
+                        <th>Title</th>
+                        <th>Status</th>
+                        <th>Uploaded</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${uploads.map(upload => `
+                        <tr>
+                            <td>${upload.platform}</td>
+                            <td>${upload.title || 'Untitled'}</td>
+                            <td><span class="badge badge-${this.getStatusClass(upload.status)}">${upload.status}</span></td>
+                            <td>${upload.uploaded_at ? window.app.formatDate(upload.uploaded_at) : 'Pending'}</td>
+                            <td>
+                                <button class="btn btn-primary btn-sm" onclick="checkStatus(${upload.id})">Check Status</button>
+                            </td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        `;
+    }
+
+    getStatusClass(status) {
+        switch (status) {
+            case 'completed': return 'success';
+            case 'failed': return 'error';
+            case 'processing': return 'warning';
+            default: return 'warning';
+        }
+    }
+
+    filterByPlatform(platform) {
+        if (!platform) {
+            this.renderUploads(this.uploads);
+        } else {
+            const filtered = this.uploads.filter(u => u.platform === platform);
+            this.renderUploads(filtered);
+        }
+    }
+}
+
+let uploadsManager;
+
+function filterUploads() {
+    const platform = document.getElementById('platform-filter').value;
+    uploadsManager.filterByPlatform(platform);
+}
+
+async function checkStatus(uploadId) {
+    try {
+        const response = await window.app.apiRequest(`/api/uploads/${uploadId}/status`);
+        if (!response) return;
+
+        const upload = await response.json();
+        window.app.showAlert(`Status: ${upload.status}`, 'success');
+    } catch (err) {
+        window.app.showAlert('Failed to check status', 'error');
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    uploadsManager = new UploadsManager();
+});
+</script>
+{% endblock %}

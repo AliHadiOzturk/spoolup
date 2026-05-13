@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block title %}Home - Video Management System{% endblock %}
+
+{% block content %}
+<div class="card" style="text-align: center; padding: 4rem 2rem;">
+    <h1>Video Management System</h1>
+    <p style="color: var(--text-secondary); margin: 1rem 0;">
+        Manage your 3D printer videos, create shorts, and upload to social media platforms.
+    </p>
+    <div style="margin-top: 2rem;">
+        <a href="/login" class="btn btn-primary" style="margin-right: 1rem;">Login</a>
+        <a href="/dashboard" class="btn btn-success">Go to Dashboard</a>
+    </div>
+</div>
+
+<div class="grid" style="margin-top: 2rem;">
+    <div class="card">
+        <h3>Video Processing</h3>
+        <p style="color: var(--text-secondary);">
+            Automatically process timelapse videos into vertical shorts format.
+        </p>
+    </div>
+    <div class="card">
+        <h3>Social Uploads</h3>
+        <p style="color: var(--text-secondary);">
+            Upload directly to YouTube and TikTok with a single click.
+        </p>
+    </div>
+    <div class="card">
+        <h3>Analytics</h3>
+        <p style="color: var(--text-secondary);">
+            Track views, likes, and engagement across all platforms.
+        </p>
+    </div>
+</div>
+{% endblock %}
