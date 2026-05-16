@@ -5,65 +5,257 @@
 {% block content %}
 <div class="page-header">
     <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 0.5rem;">
-        <a href="/videos" style="color: var(--text-secondary); text-decoration: none; font-size: 0.875rem;">← Back to Videos</a>
+        <a href="/videos" style="color: var(--text-secondary); text-decoration: none; font-size: 0.875rem;">Back to Videos</a>
     </div>
     <h1>{{ video.filename }}</h1>
-    <p>Video details and processing options</p>
+    <p>Video details, metadata, processing, and uploads</p>
 </div>
 
-<div class="grid">
-    <!-- Video Info Card -->
-    <div class="card">
-        <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">📋 File Information</h2>
+<!-- Video Preview Section -->
+<div class="card" style="margin-bottom: 1.5rem;">
+    <div style="display: grid; grid-template-columns: 1fr 320px; gap: 1.5rem; align-items: start;">
+        <div>
+            <video
+                controls
+                style="width: 100%; max-height: 480px; border-radius: 8px; background: var(--background);"
+                src="{{ video.original_path }}"
+            >
+                Your browser does not support the video tag.
+            </video>
+        </div>
         <div style="display: flex; flex-direction: column; gap: 0.75rem;">
-            <div style="display: flex; justify-content: space-between;">
+            <h2 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 0.5rem;">File Information</h2>
+            <div style="display: flex; justify-content: space-between; font-size: 0.875rem;">
                 <span style="color: var(--text-secondary);">Filename:</span>
-                <span style="font-weight: 500; word-break: break-all; text-align: right;">{{ video.filename }}</span>
+                <span style="font-weight: 500; word-break: break-all; text-align: right; max-width: 180px;">{{ video.filename }}</span>
             </div>
-            <div style="display: flex; justify-content: space-between;">
+            <div style="display: flex; justify-content: space-between; font-size: 0.875rem;">
                 <span style="color: var(--text-secondary);">Size:</span>
                 <span style="font-weight: 500;">{{ "%.2f" | format(video.size_bytes / 1024 / 1024) }} MB</span>
             </div>
-            <div style="display: flex; justify-content: space-between;">
+            <div style="display: flex; justify-content: space-between; font-size: 0.875rem;">
                 <span style="color: var(--text-secondary);">Created:</span>
                 <span style="font-weight: 500;">{{ video.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
             </div>
-            <div style="display: flex; justify-content: space-between;">
+            <div style="display: flex; justify-content: space-between; font-size: 0.875rem;">
+                <span style="color: var(--text-secondary);">Duration:</span>
+                <span style="font-weight: 500;">{{ "%.1f" | format(video.duration_seconds) }}s</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 0.875rem;">
+                <span style="color: var(--text-secondary);">Resolution:</span>
+                <span style="font-weight: 500;">{{ video.width }}x{{ video.height }}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 0.875rem;">
                 <span style="color: var(--text-secondary);">Printer:</span>
                 <span style="font-weight: 500;">{{ video.printer.name if video.printer else 'Unknown' }}</span>
             </div>
-        </div>
-        <hr style="border: none; border-top: 1px solid var(--border-color); margin: 1.5rem 0;">
-        <div class="video-actions" style="display: flex; gap: 0.75rem;">
-            <a href="{{ video.original_path }}" target="_blank" class="btn btn-primary">
-                Open in Moonraker
-            </a>
+            <div style="display: flex; justify-content: space-between; font-size: 0.875rem; align-items: center;">
+                <span style="color: var(--text-secondary);">Metadata:</span>
+                <span id="metadata-status-badge" class="badge badge-{{ 'success' if video.metadata_status == 'complete' else 'warning' }}">
+                    {{ video.metadata_status }}
+                </span>
+            </div>
+            <div class="video-actions" style="margin-top: 0.5rem;">
+                <a href="{{ video.original_path }}" target="_blank" class="btn btn-secondary" style="width: 100%; justify-content: center;">
+                    Open in Moonraker
+                </a>
+            </div>
         </div>
     </div>
+</div>
 
-    <!-- Processing Options Card -->
+<!-- Metadata & Processing Grid -->
+<div class="grid" style="grid-template-columns: 1fr 1fr; margin-bottom: 1.5rem;">
+    <!-- Metadata Editor Section -->
     <div class="card">
-        <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">🎬 Processing</h2>
-        <p style="color: var(--text-secondary); margin-bottom: 1rem;">
-            Convert this timelapse for YouTube Shorts or TikTok.
-        </p>
-        <div style="display: flex; flex-direction: column; gap: 0.75rem;">
-            <button class="btn btn-primary" onclick="processVideo('shorts')">
-                📱 Process for Shorts (9:16)
-            </button>
-            <button class="btn btn-secondary" onclick="processVideo('tiktok')">
-                🎵 Process for TikTok
-            </button>
+        <div style="display: flex; justify-content: between; align-items: center; margin-bottom: 1rem;">
+            <h2 style="font-size: 1.25rem; font-weight: 600;">Metadata Editor</h2>
         </div>
-        <div id="processing-status" style="margin-top: 1rem;"></div>
+        <form id="metadata-form" onsubmit="return false;">
+            <div class="form-group">
+                <label class="form-label" for="meta-title">Title <span style="color: var(--error-color);">*</span></label>
+                <input
+                    type="text"
+                    id="meta-title"
+                    class="form-control"
+                    value="{{ video.title or '' }}"
+                    placeholder="Enter video title"
+                    required
+                >
+                <div id="title-error" style="color: var(--error-color); font-size: 0.75rem; margin-top: 0.25rem; display: none;">
+                    Title is required
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="meta-description">Description</label>
+                <textarea
+                    id="meta-description"
+                    class="form-control"
+                    rows="3"
+                    placeholder="Enter video description"
+                >{{ video.description or '' }}</textarea>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="meta-tags">Tags</label>
+                <input
+                    type="text"
+                    id="meta-tags"
+                    class="form-control"
+                    value="{{ video.tags.tags | join(', ') if video.tags and video.tags.tags else '' }}"
+                    placeholder="tag1, tag2, tag3"
+                >
+                <div id="tags-chips" style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem;"></div>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="meta-category">Category</label>
+                <select id="meta-category" class="form-control">
+                    <option value="">-- Select Category --</option>
+                    <option value="Film & Animation" {{ 'selected' if video.category == 'Film & Animation' else '' }}>Film & Animation</option>
+                    <option value="Autos & Vehicles" {{ 'selected' if video.category == 'Autos & Vehicles' else '' }}>Autos & Vehicles</option>
+                    <option value="Music" {{ 'selected' if video.category == 'Music' else '' }}>Music</option>
+                    <option value="Pets & Animals" {{ 'selected' if video.category == 'Pets & Animals' else '' }}>Pets & Animals</option>
+                    <option value="Sports" {{ 'selected' if video.category == 'Sports' else '' }}>Sports</option>
+                    <option value="Travel & Events" {{ 'selected' if video.category == 'Travel & Events' else '' }}>Travel & Events</option>
+                    <option value="Gaming" {{ 'selected' if video.category == 'Gaming' else '' }}>Gaming</option>
+                    <option value="People & Blogs" {{ 'selected' if video.category == 'People & Blogs' else '' }}>People & Blogs</option>
+                    <option value="Comedy" {{ 'selected' if video.category == 'Comedy' else '' }}>Comedy</option>
+                    <option value="Entertainment" {{ 'selected' if video.category == 'Entertainment' else '' }}>Entertainment</option>
+                    <option value="News & Politics" {{ 'selected' if video.category == 'News & Politics' else '' }}>News & Politics</option>
+                    <option value="Howto & Style" {{ 'selected' if video.category == 'Howto & Style' else '' }}>Howto & Style</option>
+                    <option value="Education" {{ 'selected' if video.category == 'Education' else '' }}>Education</option>
+                    <option value="Science & Technology" {{ 'selected' if video.category == 'Science & Technology' else '' }}>Science & Technology</option>
+                    <option value="Nonprofits & Activism" {{ 'selected' if video.category == 'Nonprofits & Activism' else '' }}>Nonprofits & Activism</option>
+                </select>
+            </div>
+            <button class="btn btn-primary" onclick="saveMetadata()" style="width: 100%; justify-content: center;">
+                Save Metadata
+            </button>
+            <div id="metadata-status-msg" style="margin-top: 0.75rem;"></div>
+        </form>
+    </div>
+
+    <!-- Processing Options Section -->
+    <div class="card">
+        <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">Processing Options</h2>
+        <form id="processing-form" onsubmit="return false;">
+            <div class="form-group">
+                <label class="form-label" for="proc-zoom">Zoom Level: <span id="zoom-value" style="color: var(--primary-color); font-weight: 600;">No Zoom (0)</span></label>
+                <select
+                    id="proc-zoom"
+                    class="form-control"
+                    style="cursor: pointer;"
+                    onchange="updateZoomLabel(this.value)"
+                >
+                    <option value="0.1">Zoom Out (0.1x)</option>
+                    <option value="0.25">Zoom Out (0.25x)</option>
+                    <option value="0.5">Zoom Out (0.5x)</option>
+                    <option value="0.75">Zoom Out (0.75x)</option>
+                    <option value="0" selected>No Zoom (0)</option>
+                    <option value="1">Standard (1.0x)</option>
+                    <option value="1.5">Zoom In (1.5x)</option>
+                    <option value="2">Zoom In More (2.0x)</option>
+                    <option value="3">Max Zoom (3.0x)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="proc-duration">Target Duration (max 60s for Shorts)</label>
+                <input
+                    type="number"
+                    id="proc-duration"
+                    class="form-control"
+                    min="1"
+                    max="60"
+                    value="60"
+                    placeholder="60"
+                >
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="proc-speed">Speed Factor (0.5x - 4x)</label>
+                <input
+                    type="number"
+                    id="proc-speed"
+                    class="form-control"
+                    min="0.5"
+                    max="4"
+                    step="0.1"
+                    value="1"
+                    placeholder="1.0"
+                >
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="proc-text">Text Overlay</label>
+                <input
+                    type="text"
+                    id="proc-text"
+                    class="form-control"
+                    placeholder="Enter text to overlay on video"
+                >
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="proc-crop">Crop Mode</label>
+                <select id="proc-crop" class="form-control">
+                    <option value="center" selected>Center</option>
+                    <option value="left">Left</option>
+                    <option value="right">Right</option>
+                </select>
+            </div>
+            <button class="btn btn-primary" onclick="processVideo()" style="width: 100%; justify-content: center;">
+                Process Video
+            </button>
+            <div id="processing-status" style="margin-top: 0.75rem;"></div>
+        </form>
+    </div>
+</div>
+
+<!-- Upload Status Panel -->
+<div class="card" style="margin-bottom: 1.5rem;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <h2 style="font-size: 1.25rem; font-weight: 600;">Upload Status</h2>
+        <div id="upload-warning" style="display: {{ 'none' if video.metadata_status == 'complete' else 'flex' }}; align-items: center; gap: 0.5rem; color: var(--warning-color); font-size: 0.875rem;">
+            <span>Complete metadata before uploading</span>
+        </div>
+    </div>
+    <div id="uploads-container">
+        <p style="color: var(--text-secondary);">Loading uploads...</p>
+    </div>
+    <div style="display: flex; gap: 0.75rem; margin-top: 1rem;">
+        <button
+            id="btn-upload-youtube"
+            class="btn btn-primary"
+            onclick="uploadToPlatform('youtube')"
+            {{ 'disabled' if video.metadata_status != 'complete' else '' }}
+            style="flex: 1; justify-content: center; {{ 'opacity: 0.5; cursor: not-allowed;' if video.metadata_status != 'complete' else '' }}"
+        >
+            Upload to YouTube
+        </button>
+        <button
+            id="btn-upload-tiktok"
+            class="btn btn-secondary"
+            onclick="uploadToPlatform('tiktok')"
+            {{ 'disabled' if video.metadata_status != 'complete' else '' }}
+            style="flex: 1; justify-content: center; {{ 'opacity: 0.5; cursor: not-allowed;' if video.metadata_status != 'complete' else '' }}"
+        >
+            Upload to TikTok
+        </button>
     </div>
 </div>
 
 <!-- Processed Versions Section -->
-<div class="card" style="margin-top: 1.5rem;">
-    <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">✅ Processed Versions</h2>
+<div class="card">
+    <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">Processed Versions</h2>
     <div id="processed-videos-container">
         <p style="color: var(--text-secondary);">Loading processed versions...</p>
+    </div>
+</div>
+
+<!-- Video Preview Modal -->
+<div id="preview-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); z-index: 1000; justify-content: center; align-items: center;">
+    <div style="position: relative; max-width: 90%; max-height: 90%; width: 100%;">
+        <button onclick="closePreview()" style="position: absolute; top: -40px; right: 0; background: none; border: none; color: white; font-size: 1.5rem; cursor: pointer; padding: 0.5rem;">✕</button>
+        <video id="preview-video" controls style="width: 100%; max-height: 80vh; border-radius: 8px; background: #000;">
+            Your browser does not support the video tag.
+        </video>
+        <div id="preview-info" style="color: white; margin-top: 1rem; text-align: center; font-size: 0.875rem;"></div>
     </div>
 </div>
 {% endblock %}
@@ -72,113 +264,444 @@
 <script>
 document.addEventListener('DOMContentLoaded', () => {
     window.videoId = {{ video.id }};
-    
+
+    initTagsChips();
     loadProcessedVersions();
-    
-    window.processVideo = async (platform) => {
-        const statusEl = document.getElementById('processing-status');
-        statusEl.innerHTML = `<div class="alert alert-info">⏳ Processing video... This may take a few minutes.</div>`;
-        
-        try {
-            const response = await window.app.apiRequest(`/api/videos/${window.videoId}/process`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ platform })
-            });
-            
-            if (response && response.ok) {
-                const data = await response.json();
-                statusEl.innerHTML = `<div class="alert alert-success">✅ Processing completed! Video is ready to upload.</div>`;
-                loadProcessedVersions();
-            } else {
-                const error = await response.json();
-                statusEl.innerHTML = `<div class="alert alert-error">❌ ${error.detail || 'Processing failed'}</div>`;
-            }
-        } catch (err) {
-            statusEl.innerHTML = `<div class="alert alert-error">❌ Error: ${err.message}</div>`;
-        }
+    loadUploads();
+});
+
+// Tags chips functionality
+function initTagsChips() {
+    const tagsInput = document.getElementById('meta-tags');
+    const chipsContainer = document.getElementById('tags-chips');
+
+    function updateChips() {
+        const value = tagsInput.value;
+        const tags = value.split(',').map(t => t.trim()).filter(t => t.length > 0);
+        chipsContainer.innerHTML = tags.map(tag => `
+            <span style="
+                display: inline-flex;
+                align-items: center;
+                gap: 0.25rem;
+                padding: 0.25rem 0.5rem;
+                background: rgba(59, 130, 246, 0.15);
+                color: #60a5fa;
+                border-radius: 4px;
+                font-size: 0.75rem;
+                font-weight: 500;
+            ">${tag}</span>
+        `).join('');
+    }
+
+    tagsInput.addEventListener('input', updateChips);
+    updateChips();
+}
+
+// Save metadata
+window.saveMetadata = async () => {
+    const titleInput = document.getElementById('meta-title');
+    const titleError = document.getElementById('title-error');
+    const statusMsg = document.getElementById('metadata-status-msg');
+
+    // Validation
+    if (!titleInput.value.trim()) {
+        titleError.style.display = 'block';
+        titleInput.style.borderColor = 'var(--error-color)';
+        return;
+    }
+
+    titleError.style.display = 'none';
+    titleInput.style.borderColor = '';
+
+    const tagsValue = document.getElementById('meta-tags').value;
+    const tags = tagsValue.split(',').map(t => t.trim()).filter(t => t.length > 0);
+
+    const payload = {
+        title: titleInput.value.trim(),
+        description: document.getElementById('meta-description').value.trim(),
+        tags: tags,
+        category: document.getElementById('meta-category').value,
     };
+
+    statusMsg.innerHTML = '<div class="alert alert-info">Saving metadata...</div>';
+
+    try {
+        const response = await window.app.apiRequest(`/api/videos/${window.videoId}/metadata`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+
+        if (response && response.ok) {
+            statusMsg.innerHTML = '<div class="alert alert-success">Metadata saved successfully!</div>';
+            // Update status badge
+            const badge = document.getElementById('metadata-status-badge');
+            badge.textContent = 'complete';
+            badge.className = 'badge badge-success';
+            // Enable upload buttons
+            document.getElementById('btn-upload-youtube').disabled = false;
+            document.getElementById('btn-upload-youtube').style.opacity = '1';
+            document.getElementById('btn-upload-youtube').style.cursor = 'pointer';
+            document.getElementById('btn-upload-tiktok').disabled = false;
+            document.getElementById('btn-upload-tiktok').style.opacity = '1';
+            document.getElementById('btn-upload-tiktok').style.cursor = 'pointer';
+            document.getElementById('upload-warning').style.display = 'none';
+            setTimeout(() => { statusMsg.innerHTML = ''; }, 3000);
+        } else {
+            const error = await response.json();
+            statusMsg.innerHTML = `<div class="alert alert-error">${error.detail || 'Failed to save metadata'}</div>`;
+        }
+    } catch (err) {
+        statusMsg.innerHTML = `<div class="alert alert-error">Error: ${err.message}</div>`;
+    }
+};
+
+// Update zoom label based on selection
+function updateZoomLabel(value) {
+    const labels = {
+        '0.1': 'Zoom Out (0.1x)',
+        '0.25': 'Zoom Out (0.25x)',
+        '0.5': 'Zoom Out (0.5x)',
+        '0.75': 'Zoom Out (0.75x)',
+        '0': 'No Zoom (0)',
+        '1': 'Standard (1.0x)',
+        '1.5': 'Zoom In (1.5x)',
+        '2': 'Zoom In More (2.0x)',
+        '3': 'Max Zoom (3.0x)',
+    };
+    document.getElementById('zoom-value').textContent = labels[value] || value + 'x';
+}
+
+// Process video with options
+window.processVideo = async () => {
+    const statusEl = document.getElementById('processing-status');
+
+    const zoom = parseFloat(document.getElementById('proc-zoom').value);
+    const duration = parseFloat(document.getElementById('proc-duration').value);
+    const speed = parseFloat(document.getElementById('proc-speed').value);
+    const text = document.getElementById('proc-text').value.trim();
+    const cropMode = document.getElementById('proc-crop').value;
+
+    // Validation
+    if (duration < 1 || duration > 60) {
+        statusEl.innerHTML = '<div class="alert alert-error">Duration must be between 1 and 60 seconds</div>';
+        return;
+    }
+    if (speed < 0.5 || speed > 4) {
+        statusEl.innerHTML = '<div class="alert alert-error">Speed factor must be between 0.5x and 4x</div>';
+        return;
+    }
+
+    statusEl.innerHTML = '<div class="alert alert-info">Processing video... This may take a few minutes.</div>';
+
+    const payload = {
+        platform: 'shorts',
+        zoom_level: zoom,
+        duration: duration,
+        speed_factor: speed,
+        add_text: text || null,
+        crop_mode: cropMode,
+    };
+
+    try {
+        const response = await window.app.apiRequest(`/api/videos/${window.videoId}/process`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+
+        if (response && response.ok) {
+            const data = await response.json();
+            statusEl.innerHTML = '<div class="alert alert-success">Processing completed! Video is ready to upload.</div>';
+            loadProcessedVersions();
+            loadUploads();
+        } else {
+            const error = await response.json();
+            statusEl.innerHTML = `<div class="alert alert-error">${error.detail || 'Processing failed'}</div>`;
+        }
+    } catch (err) {
+        statusEl.innerHTML = `<div class="alert alert-error">Error: ${err.message}</div>`;
+    }
+};
+
+// Preview a processed video
+window.previewVideo = (processedPath, width, height, duration) => {
+    const modal = document.getElementById('preview-modal');
+    const video = document.getElementById('preview-video');
+    const info = document.getElementById('preview-info');
     
-    async function loadProcessedVersions() {
-        const container = document.getElementById('processed-videos-container');
-        try {
-            const response = await window.app.apiRequest(`/api/videos/${window.videoId}/processed`);
-            if (!response) return;
-            
-            const processed = await response.json();
-            
-            if (processed.length === 0) {
-                container.innerHTML = `<div class="empty-state" style="padding: 2rem;">
-                        <p style="color: var(--text-secondary);">No processed versions yet. Click "Process for Shorts" above.</p>
-                    </div>`;
-                return;
-            }
-            
+    // Extract just the filename from the path
+    const filename = processedPath.split('/').pop();
+    video.src = `/processed/${filename}`;
+    info.innerHTML = `${width}x${height} &middot; ${Math.round(duration)}s`;
+    
+    modal.style.display = 'flex';
+    video.play();
+};
+
+// Close preview modal
+window.closePreview = () => {
+    const modal = document.getElementById('preview-modal');
+    const video = document.getElementById('preview-video');
+    video.pause();
+    video.src = '';
+    modal.style.display = 'none';
+};
+
+// Close modal on escape key
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closePreview();
+});
+
+// Close modal on background click
+document.getElementById('preview-modal').addEventListener('click', (e) => {
+    if (e.target.id === 'preview-modal') closePreview();
+});
+
+// Load processed versions
+async function loadProcessedVersions() {
+    const container = document.getElementById('processed-videos-container');
+    try {
+        const [response, uploadsResponse] = await Promise.all([
+            window.app.apiRequest(`/api/videos/${window.videoId}/processed`),
+            window.app.apiRequest('/api/uploads'),
+        ]);
+        if (!response || !uploadsResponse) return;
+
+        const processed = await response.json();
+        const allUploads = await uploadsResponse.json();
+        const uploadsByProcessed = {};
+        allUploads.forEach(u => {
+            if (!uploadsByProcessed[u.processed_video_id]) uploadsByProcessed[u.processed_video_id] = [];
+            uploadsByProcessed[u.processed_video_id].push(u);
+        });
+
+        if (processed.length === 0) {
             container.innerHTML = `
-                <div class="table-container">
-                    <table class="table">
-                        <thead>
-                            <tr>
-                                <th>Format</th>
-                                <th>Resolution</th>
-                                <th>Duration</th>
-                                <th>Status</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${processed.map(p => `
+                <div class="empty-state" style="padding: 2rem;">
+                    <p style="color: var(--text-secondary);">No processed versions yet. Use the Processing Options panel above.</p>
+                </div>`;
+            return;
+        }
+
+        container.innerHTML = `
+            <div class="table-container">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Preview</th>
+                            <th>ID</th>
+                            <th>Format</th>
+                            <th>Resolution</th>
+                            <th>Duration</th>
+                            <th>Status</th>
+                            <th>Uploads</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${processed.map(p => {
+                            const statusClass = p.status === 'completed' ? 'badge-success' : p.status === 'failed' ? 'badge-error' : 'badge-warning';
+                            const uploads = uploadsByProcessed[p.id] || [];
+                            const uploadBadges = uploads.map(u => {
+                                const uClass = u.status === 'completed' ? 'badge-success' : u.status === 'failed' ? 'badge-error' : u.status === 'uploading' ? 'badge-info' : 'badge-warning';
+                                return `<span class="badge ${uClass}" style="margin-right: 0.25rem;">${u.platform}: ${u.status}</span>`;
+                            }).join('') || '<span style="color: var(--text-secondary); font-size: 0.75rem;">None</span>';
+                            
+                            const previewBtn = p.status === 'completed' 
+                                ? `<button class="btn btn-sm btn-secondary" onclick="previewVideo('${p.processed_path}', ${p.width}, ${p.height}, ${p.duration_seconds})" title="Preview">▶️</button>`
+                                : '<span style="font-size: 1.2rem; opacity: 0.3;">▶️</span>';
+                            
+                            return `
                                 <tr>
+                                    <td style="text-align: center;">${previewBtn}</td>
+                                    <td><code style="font-size: 0.75rem;">#${p.id}</code></td>
                                     <td>${p.format.toUpperCase()}</td>
                                     <td>${p.width}x${p.height}</td>
                                     <td>${Math.round(p.duration_seconds)}s</td>
-                                    <td><span class="badge badge-${p.status === 'completed' ? 'success' : 'warning'}">${p.status}</span></td>
+                                    <td><span class="badge ${statusClass}">${p.status}</span></td>
+                                    <td>${uploadBadges}</td>
                                     <td>
                                         ${p.status === 'completed' ? `
-                                            <button class="btn btn-primary btn-sm" onclick="uploadVideo(${p.id}, 'youtube')">Upload to YouTube</button>
-                                            <button class="btn btn-secondary btn-sm" onclick="uploadVideo(${p.id}, 'tiktok')">Upload to TikTok</button>
-                                        ` : '⏳ Processing...'}
+                                            <button class="btn btn-primary btn-sm" onclick="uploadVideo(${p.id}, 'youtube')">YouTube</button>
+                                            <button class="btn btn-secondary btn-sm" onclick="uploadVideo(${p.id}, 'tiktok')">TikTok</button>
+                                            <button class="btn btn-danger btn-sm" onclick="deleteProcessedVideo(${p.id})" title="Delete" style="margin-left: 0.5rem;">🗑️</button>
+                                        ` : '<span style="color: var(--text-secondary);">Processing...</span>'}
                                     </td>
                                 </tr>
-                            `).join('')}
-                        </tbody>
-                    </table>
-                </div>
-            `;
-        } catch (err) {
-            console.error('Failed to load processed versions:', err);
-            container.innerHTML = `<p style="color: var(--error-color);">Failed to load processed versions</p>`;
-        }
+                            `;
+                        }).join('')}
+                    </tbody>
+                </table>
+            </div>
+        `;
+    } catch (err) {
+        console.error('Failed to load processed versions:', err);
+        container.innerHTML = '<p style="color: var(--error-color);">Failed to load processed versions</p>';
     }
-    
-    window.uploadVideo = async (processedId, platform) => {
-        const statusEl = document.getElementById('processing-status');
-        statusEl.innerHTML = `<div class="alert alert-info">⏳ Uploading to ${platform}...</div>`;
-        
-        try {
-            const response = await window.app.apiRequest(`/api/uploads/${platform}/${processedId}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    title: '{{ video.filename }}',
-                    description: '3D Print Timelapse',
-                    tags: ['3DPrinting', 'Timelapse']
-                })
-            });
-            
-            if (response && response.ok) {
-                statusEl.innerHTML = `<div class="alert alert-success">✅ Upload started! Check the Uploads page.</div>`;
-                setTimeout(() => {
-                    window.location.href = '/uploads';
-                }, 2000);
-            } else {
-                const error = await response.json();
-                statusEl.innerHTML = `<div class="alert alert-error">❌ ${error.detail || 'Upload failed'}</div>`;
-            }
-        } catch (err) {
-            statusEl.innerHTML = `<div class="alert alert-error">❌ Error: ${err.message}</div>`;
+}
+
+// Load uploads for this video
+async function loadUploads() {
+    const container = document.getElementById('uploads-container');
+    try {
+        // Fetch all uploads and filter by this video's processed versions
+        const [uploadsResponse, processedResponse] = await Promise.all([
+            window.app.apiRequest('/api/uploads'),
+            window.app.apiRequest(`/api/videos/${window.videoId}/processed`),
+        ]);
+
+        if (!uploadsResponse || !processedResponse) {
+            container.innerHTML = '<p style="color: var(--text-secondary);">Unable to load uploads</p>';
+            return;
         }
-    };
-});
+
+        const allUploads = await uploadsResponse.json();
+        const processed = await processedResponse.json();
+        const processedIds = new Set(processed.map(p => p.id));
+        const videoUploads = allUploads.filter(u => processedIds.has(u.processed_video_id));
+
+        if (videoUploads.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state" style="padding: 1.5rem;">
+                    <p style="color: var(--text-secondary);">No uploads yet. Process a video and upload it to a platform.</p>
+                </div>`;
+            return;
+        }
+
+        container.innerHTML = `
+            <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+                ${videoUploads.map(u => {
+                    const platformIcon = u.platform === 'youtube' ? '▶️' : '🎵';
+                    const statusClass = u.status === 'completed' ? 'badge-success' : u.status === 'failed' ? 'badge-error' : u.status === 'uploading' ? 'badge-info' : 'badge-warning';
+                    const progressBar = u.status === 'uploading' && u.upload_progress ? `
+                        <div style="width: 100%; height: 4px; background: var(--border-color); border-radius: 2px; margin-top: 0.5rem; overflow: hidden;">
+                            <div style="width: ${u.upload_progress}%; height: 100%; background: var(--primary-color); transition: width 0.3s;"></div>
+                        </div>
+                    ` : '';
+                    const errorMsg = u.status === 'failed' && u.error_message ? `
+                        <div style="color: var(--error-color); font-size: 0.75rem; margin-top: 0.25rem;">${u.error_message}</div>
+                    ` : '';
+                    const viewLink = u.status === 'completed' && u.upload_url ? `
+                        <a href="${u.upload_url}" target="_blank" style="color: var(--primary-color); font-size: 0.75rem; text-decoration: none; margin-left: auto;">View →</a>
+                    ` : '';
+                    return `
+                        <div style="
+                            display: flex;
+                            flex-direction: column;
+                            padding: 0.75rem 1rem;
+                            background: var(--background);
+                            border: 1px solid var(--border-color);
+                            border-radius: 8px;
+                        ">
+                            <div style="display: flex; align-items: center; gap: 0.75rem;">
+                                <span style="font-size: 1.25rem;">${platformIcon}</span>
+                                <div style="flex: 1;">
+                                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                        <span style="font-weight: 500; font-size: 0.875rem;">${u.title || 'Untitled'}</span>
+                                        <span class="badge ${statusClass}">${u.status}</span>
+                                        ${viewLink}
+                                    </div>
+                                    <div style="color: var(--text-secondary); font-size: 0.75rem; margin-top: 0.125rem;">
+                                        ${u.platform} &middot; ${u.uploaded_at ? new Date(u.uploaded_at).toLocaleString() : 'Pending'}
+                                    </div>
+                                </div>
+                            </div>
+                            ${progressBar}
+                            ${errorMsg}
+                        </div>
+                    `;
+                }).join('')}
+            </div>
+        `;
+    } catch (err) {
+        console.error('Failed to load uploads:', err);
+        container.innerHTML = '<p style="color: var(--error-color);">Failed to load uploads</p>';
+    }
+}
+
+// Upload a processed video to a platform
+window.uploadVideo = async (processedId, platform) => {
+    const statusEl = document.getElementById('processing-status');
+    statusEl.innerHTML = `<div class="alert alert-info">Uploading to ${platform}...</div>`;
+
+    const title = document.getElementById('meta-title').value.trim() || '{{ video.filename }}';
+    const description = document.getElementById('meta-description').value.trim() || '3D Print Timelapse';
+    const tagsValue = document.getElementById('meta-tags').value;
+    const tags = tagsValue.split(',').map(t => t.trim()).filter(t => t.length > 0);
+
+    try {
+        const response = await window.app.apiRequest(`/api/uploads/${platform}/${processedId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                title: title,
+                description: description,
+                tags: tags.length > 0 ? tags : ['3DPrinting', 'Timelapse'],
+            }),
+        });
+
+        if (response && response.ok) {
+            statusEl.innerHTML = `<div class="alert alert-success">Upload started! Check the Uploads page.</div>`;
+            loadUploads();
+            loadProcessedVersions();
+        } else {
+            const error = await response.json();
+            statusEl.innerHTML = `<div class="alert alert-error">${error.detail || 'Upload failed'}</div>`;
+        }
+    } catch (err) {
+        statusEl.innerHTML = `<div class="alert alert-error">Error: ${err.message}</div>`;
+    }
+};
+
+// Delete a processed video
+window.deleteProcessedVideo = async (processedId) => {
+    if (!confirm('Are you sure you want to delete this processed version? This will also remove any associated uploads.')) {
+        return;
+    }
+
+    const statusEl = document.getElementById('processing-status');
+    statusEl.innerHTML = '<div class="alert alert-info">Deleting processed version...</div>';
+
+    try {
+        const response = await window.app.apiRequest(`/api/videos/${window.videoId}/processed/${processedId}`, {
+            method: 'DELETE',
+        });
+
+        if (response && response.ok) {
+            statusEl.innerHTML = '<div class="alert alert-success">Processed version deleted successfully!</div>';
+            loadProcessedVersions();
+            loadUploads();
+        } else {
+            const error = await response.json();
+            statusEl.innerHTML = `<div class="alert alert-error">${error.detail || 'Failed to delete processed version'}</div>`;
+        }
+    } catch (err) {
+        statusEl.innerHTML = `<div class="alert alert-error">Error: ${err.message}</div>`;
+    }
+};
+
+// Upload to platform from main panel (uses first completed processed version)
+window.uploadToPlatform = async (platform) => {
+    const statusEl = document.getElementById('processing-status');
+    statusEl.innerHTML = `<div class="alert alert-info">Finding processed version...</div>`;
+
+    try {
+        const response = await window.app.apiRequest(`/api/videos/${window.videoId}/processed`);
+        if (!response) return;
+
+        const processed = await response.json();
+        const completed = processed.find(p => p.status === 'completed');
+
+        if (!completed) {
+            statusEl.innerHTML = '<div class="alert alert-error">No completed processed version found. Please process the video first.</div>';
+            return;
+        }
+
+        await window.uploadVideo(completed.id, platform);
+    } catch (err) {
+        statusEl.innerHTML = `<div class="alert alert-error">Error: ${err.message}</div>`;
+    }
+};
 </script>
 {% endblock %}

@@ -19,6 +19,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from auth import (
@@ -40,6 +41,7 @@ from database.models import (
     User,
     Video,
     VideoAnalytics,
+    ZipArchive,
 )
 
 logger = logging.getLogger(__name__)
@@ -83,12 +85,17 @@ class UserLogin(BaseModel):
 class VideoResponse(BaseModel):
     id: int
     filename: str
+    title: Optional[str]
+    description: Optional[str]
     size_bytes: int
     duration_seconds: float
     width: int
     height: int
     fps: float
     created_at: datetime
+    modified_at: Optional[datetime]
+    metadata_status: str
+    thumbnail_path: Optional[str]
 
     class Config:
         from_attributes = True
@@ -97,8 +104,12 @@ class VideoResponse(BaseModel):
 class VideoDetailResponse(VideoResponse):
     printer_id: int
     original_path: str
+    tags: Optional[Dict[str, Any]]
+    category: Optional[str]
+    processing_options: Optional[Dict[str, Any]]
     moonraker_metadata_json: Optional[Dict[str, Any]]
     processed_videos: List[Dict[str, Any]]
+    uploads: List[Dict[str, Any]]
 
 
 class ProcessedVideoResponse(BaseModel):
@@ -117,6 +128,7 @@ class ProcessedVideoResponse(BaseModel):
 
 class UploadResponse(BaseModel):
     id: int
+    processed_video_id: int
     platform: str
     platform_video_id: Optional[str]
     status: str
@@ -179,6 +191,10 @@ class ProcessRequest(BaseModel):
     start_time: Optional[float] = 0.0
     duration: Optional[float] = 60.0
     output_resolution: Optional[str] = "1080x1920"
+    zoom_level: Optional[float] = 1.0
+    crop_mode: Optional[str] = "center"
+    speed_factor: Optional[float] = None
+    add_text: Optional[str] = None
 
 
 # =============================================================================
@@ -202,9 +218,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Security headers middleware
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    """Add security headers to all responses."""
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
 # Static files and templates
-app.mount("/static", StaticFiles(directory="ui/static"), name="static")
-templates = Jinja2Templates(directory="ui/templates")
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "ui/static")), name="static")
+app.mount("/processed", StaticFiles(directory=os.path.join(BASE_DIR, "uploads/processed")), name="processed")
+templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "ui/templates"))
 
 
 # =============================================================================
@@ -231,6 +260,78 @@ def _record_failed_login(username: str) -> None:
     if username not in _login_attempts:
         _login_attempts[username] = []
     _login_attempts[username].append(datetime.utcnow())
+
+
+# Rate limiting tracking
+_rate_limit_tracker: Dict[str, List[datetime]] = {}
+
+
+def _check_rate_limit(client_ip: str, max_requests: int = 100, window_minutes: int = 15) -> bool:
+    """Check if client has exceeded rate limit.
+    
+    Args:
+        client_ip: Client IP address
+        max_requests: Maximum requests allowed in window
+        window_minutes: Time window in minutes
+        
+    Returns:
+        True if request is allowed, False if rate limited
+    """
+    now = datetime.utcnow()
+    requests = _rate_limit_tracker.get(client_ip, [])
+    # Keep only requests within the window
+    recent = [r for r in requests if now - r < timedelta(minutes=window_minutes)]
+    _rate_limit_tracker[client_ip] = recent
+    return len(recent) < max_requests
+
+
+def _record_request(client_ip: str) -> None:
+    """Record a request for rate limiting."""
+    if client_ip not in _rate_limit_tracker:
+        _rate_limit_tracker[client_ip] = []
+    _rate_limit_tracker[client_ip].append(datetime.utcnow())
+
+
+def log_audit_action(
+    user_id: Optional[int],
+    action: str,
+    entity_type: Optional[str] = None,
+    entity_id: Optional[int] = None,
+    details: Optional[Dict[str, Any]] = None,
+    request: Optional[Request] = None,
+) -> None:
+    """Log an audit action to the database.
+    
+    Args:
+        user_id: ID of the user performing the action
+        action: Action description (e.g., "create_video", "delete_upload")
+        entity_type: Type of entity affected (e.g., "video", "upload")
+        entity_id: ID of the entity affected
+        details: Additional details as a dict
+        request: FastAPI request object for IP address
+    """
+    try:
+        db = SessionLocal()
+        try:
+            from database.models import AuditLog
+            ip_address = None
+            if request and hasattr(request, "client") and request.client:
+                ip_address = request.client.host
+            
+            log_entry = AuditLog(
+                user_id=user_id,
+                action=action,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                details=details,
+                ip_address=ip_address,
+            )
+            db.add(log_entry)
+            db.commit()
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"Failed to log audit action: {e}")
 
 
 # =============================================================================
@@ -317,6 +418,15 @@ async def uploads_page(request: Request) -> Any:
     """Render the uploads page."""
     return templates.TemplateResponse(
         "uploads.html",
+        {"request": request},
+    )
+
+
+@app.get("/zips", response_class=HTMLResponse)
+async def zips_page(request: Request) -> Any:
+    """Render the zip archives page."""
+    return templates.TemplateResponse(
+        "zips.html",
         {"request": request},
     )
 
@@ -499,13 +609,44 @@ video_router = APIRouter(prefix="/api/videos", tags=["Videos"])
 @video_router.get("/", response_model=List[VideoResponse])
 async def list_videos(
     skip: int = 0,
-    limit: int = 100,
+    limit: int = 1000,
+    sort_by: str = "date",
+    sort_order: str = "desc",
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> Any:
-    """List all videos with pagination."""
-    videos = db.query(Video).offset(skip).limit(limit).all()
-    logger.info(f"Listed {len(videos)} videos (skip={skip}, limit={limit})")
+    """List all videos with pagination and sorting."""
+    logger.info(f"Listing videos with sort_by={sort_by}, sort_order={sort_order}")
+
+    query = db.query(Video)
+
+    # Only show actual video files (filter by extension)
+    # In case old data has non-video files
+    video_extensions = [".mp4", ".mov", ".avi", ".mkv", ".webm"]
+    # Use SQL LIKE for extension filtering
+    extension_filters = []
+    for ext in video_extensions:
+        extension_filters.append(Video.filename.ilike(f"%{ext}"))
+    query = query.filter(or_(*extension_filters))
+
+    # Apply sorting
+    sort_column = Video.modified_at
+    if sort_by == "date_oldest":
+        sort_column = Video.created_at
+    elif sort_by == "name":
+        sort_column = Video.filename
+    elif sort_by == "name_desc":
+        sort_column = Video.filename
+    elif sort_by == "duration":
+        sort_column = Video.duration_seconds
+
+    if sort_order == "asc":
+        query = query.order_by(sort_column.asc())
+    else:
+        query = query.order_by(sort_column.desc())
+
+    videos = query.offset(skip).limit(limit).all()
+    logger.info(f"Listed {len(videos)} videos (skip={skip}, limit={limit}, sort_by={sort_by}, sort_order={sort_order})")
     if not videos:
         logger.info("No videos found in database. Try syncing a printer first.")
     return videos
@@ -525,22 +666,43 @@ async def get_video(
             detail="Video not found",
         )
 
-    # Build response with processed videos
-    processed = [
-        {
-            "id": pv.id,
-            "format": pv.format,
-            "status": pv.status,
-            "duration_seconds": pv.duration_seconds,
-            "created_at": pv.created_at,
-        }
-        for pv in video.processed_videos
-    ]
+    # Build response with processed videos and their uploads
+    processed = []
+    all_uploads = []
+    for pv in video.processed_videos:
+        pv_uploads = [
+            {
+                "id": u.id,
+                "platform": u.platform,
+                "status": u.status,
+                "uploaded_at": u.uploaded_at,
+                "error_message": u.error_message,
+                "processed_video_id": pv.id,
+            }
+            for u in pv.uploads
+        ]
+        all_uploads.extend(pv_uploads)
+        processed.append(
+            {
+                "id": pv.id,
+                "format": pv.format,
+                "status": pv.status,
+                "duration_seconds": pv.duration_seconds,
+                "created_at": pv.created_at,
+                "uploads": pv_uploads,
+            }
+        )
 
     return {
         "id": video.id,
         "printer_id": video.printer_id,
         "filename": video.filename,
+        "title": video.title,
+        "description": video.description,
+        "tags": video.tags,
+        "category": video.category,
+        "processing_options": video.processing_options,
+        "metadata_status": video.metadata_status,
         "original_path": video.original_path,
         "size_bytes": video.size_bytes,
         "duration_seconds": video.duration_seconds,
@@ -548,9 +710,74 @@ async def get_video(
         "height": video.height,
         "fps": video.fps,
         "created_at": video.created_at,
+        "modified_at": video.modified_at,
         "moonraker_metadata_json": video.moonraker_metadata_json,
         "processed_videos": processed,
+        "uploads": all_uploads,
     }
+
+
+class VideoMetadataUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    tags: Optional[List[str]] = None
+    category: Optional[str] = None
+
+
+@video_router.put("/{video_id}/metadata", response_model=VideoResponse)
+async def update_video_metadata(
+    video_id: int,
+    metadata: VideoMetadataUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> Any:
+    """Update video metadata."""
+    video = db.query(Video).filter(Video.id == video_id).first()
+    if video is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Video not found",
+        )
+
+    if metadata.title is not None:
+        video.title = metadata.title
+    if metadata.description is not None:
+        video.description = metadata.description
+    if metadata.tags is not None:
+        video.tags = {"tags": metadata.tags}
+    if metadata.category is not None:
+        video.category = metadata.category
+
+    # Set metadata_status based on whether title is present
+    video.metadata_status = "complete" if video.title else "pending"
+
+    db.commit()
+    db.refresh(video)
+
+    logger.info(f"Updated metadata for video {video_id}: status={video.metadata_status}")
+    return video
+
+
+@video_router.get("/{video_id}/uploads", response_model=List[UploadResponse])
+async def get_video_uploads(
+    video_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> Any:
+    """Get all uploads for a video across all processed versions."""
+    video = db.query(Video).filter(Video.id == video_id).first()
+    if video is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Video not found",
+        )
+
+    uploads = []
+    for pv in video.processed_videos:
+        for upload in pv.uploads:
+            uploads.append(upload)
+
+    return uploads
 
 
 @video_router.post("/{video_id}/process", response_model=ProcessedVideoResponse)
@@ -650,7 +877,9 @@ async def process_video(
             )
 
     # Process the video
-    output_filename = f"{video_id}_short.mp4"
+    import time
+    timestamp = int(time.time())
+    output_filename = f"{video_id}_short_{timestamp}.mp4"
     output_path = processed_dir / output_filename
 
     logger.info(f"Processing video for shorts: {raw_path} -> {output_path}")
@@ -658,14 +887,24 @@ async def process_video(
     try:
         processor = VideoProcessor(ffmpeg_path=settings.ffmpeg_path)
         
+        # Build processing options
+        process_options = {
+            "crop_mode": process_request.crop_mode or "center",
+            "target_duration": process_request.duration or 60,
+            "zoom_level": process_request.zoom_level if process_request.zoom_level is not None else 1.0,
+        }
+        if process_request.speed_factor is not None:
+            process_options["speed_factor"] = process_request.speed_factor
+        if process_request.add_text is not None:
+            process_options["add_text"] = process_request.add_text
+
+        logger.info(f"Processing options: {process_options}")
+
         # Process for shorts
         success = processor.process_for_shorts(
             input_path=str(raw_path),
             output_path=str(output_path),
-            options={
-                "crop_mode": "center",
-                "target_duration": process_request.duration or 60,
-            }
+            options=process_options,
         )
 
         if not success:
@@ -736,6 +975,53 @@ async def list_processed_videos(
         )
 
     return video.processed_videos
+
+
+@video_router.delete("/{video_id}/processed/{processed_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_processed_video_endpoint(
+    video_id: int,
+    processed_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> None:
+    """Delete a processed video version."""
+    # Verify the video exists
+    video = db.query(Video).filter(Video.id == video_id).first()
+    if video is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Video not found",
+        )
+    
+    # Find the processed video
+    processed = db.query(ProcessedVideo).filter(
+        ProcessedVideo.id == processed_id,
+        ProcessedVideo.video_id == video_id,
+    ).first()
+    
+    if processed is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Processed video not found",
+        )
+    
+    # Delete associated uploads first
+    for upload in processed.uploads:
+        db.delete(upload)
+    
+    # Delete the file from disk
+    try:
+        if os.path.exists(processed.processed_path):
+            os.remove(processed.processed_path)
+            logger.info(f"Deleted processed video file: {processed.processed_path}")
+    except OSError as e:
+        logger.error(f"Failed to delete processed video file: {e}")
+        # Continue to delete the database record even if file deletion fails
+    
+    # Delete the database record
+    db.delete(processed)
+    db.commit()
+    logger.info(f"Deleted processed video record: {processed_id}")
 
 
 app.include_router(video_router)
@@ -872,39 +1158,45 @@ async def upload_to_youtube(
         
         logger.info("[YouTube Upload] Authentication successful")
         
-        # Extract tags
+        # Extract tags and append to description
         tags = upload_data.tags or []
         if upload.tags and isinstance(upload.tags, dict):
             tags = upload.tags.get("tags", tags)
         
+        # Append tags to description
+        description = upload_data.description or ""
+        if tags:
+            tag_lines = "\n\n" + " ".join([f"#{tag}" for tag in tags])
+            description = description + tag_lines
+        
         logger.info(f"[YouTube Upload] Tags: {tags}")
-        logger.info(f"[YouTube Upload] Description: {upload_data.description or ''}")
+        logger.info(f"[YouTube Upload] Description: {description}")
         
         # Upload the video
         logger.info(f"[YouTube Upload] Beginning video upload...")
-        video_id = uploader.upload_video(
+        success, video_id, error = uploader.upload_video(
             video_path=processed.processed_path,
             title=upload.title,
-            description=upload_data.description or "",
-            tags=tags,
+            description=description,
+            tags=[],  # Tags are now in description
             category_id="22",  # People & Blogs
             privacy_status="private",  # Default to private
         )
-        
-        if video_id:
+
+        if success and video_id:
             # Success!
             upload.status = "completed"
             upload.platform_video_id = video_id
             upload.upload_url = f"https://youtube.com/watch?v={video_id}"
             upload.uploaded_at = datetime.utcnow()
             db.commit()
-            
+
             logger.info(f"[YouTube Upload] SUCCESS! Video ID: {video_id}")
             logger.info(f"[YouTube Upload] URL: https://youtube.com/watch?v={video_id}")
             logger.info(f"[YouTube Upload] Upload completed at: {upload.uploaded_at}")
         else:
-            # Upload failed but no exception
-            error_msg = "YouTube upload failed. Check server logs for details."
+            # Upload failed
+            error_msg = f"YouTube upload failed: {error.get('message', 'Unknown error')}" if error else "YouTube upload failed. Check server logs for details."
             logger.error(f"[YouTube Upload] {error_msg}")
             upload.status = "failed"
             upload.error_message = error_msg
@@ -1084,6 +1376,61 @@ async def get_upload_logs(
 
 
 app.include_router(upload_router)
+
+
+# =============================================================================
+# Zip Archive Routes
+# =============================================================================
+
+zip_router = APIRouter(prefix="/api/zips", tags=["Zip Archives"])
+
+
+class ZipArchiveResponse(BaseModel):
+    id: int
+    filename: str
+    size_bytes: int
+    modified_at: Optional[datetime]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+@zip_router.get("/", response_model=List[ZipArchiveResponse])
+async def list_zip_archives(
+    skip: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> Any:
+    """List all zip archives sorted by modified date (newest first)."""
+    zips = (
+        db.query(ZipArchive)
+        .order_by(ZipArchive.modified_at.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+    return zips
+
+
+@zip_router.get("/{zip_id}/download")
+async def download_zip_archive(
+    zip_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> Any:
+    """Redirect to download a zip archive from Moonraker."""
+    zip_archive = db.query(ZipArchive).filter(ZipArchive.id == zip_id).first()
+    if zip_archive is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Zip archive not found",
+        )
+    return {"download_url": zip_archive.original_path}
+
+
+app.include_router(zip_router)
 
 
 # =============================================================================
@@ -1296,7 +1643,7 @@ async def sync_printer_videos(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> Any:
-    """Sync videos from a printer."""
+    """Sync videos, thumbnails, and zip archives from a printer."""
     printer = db.query(Printer).filter(Printer.id == printer_id).first()
     if printer is None:
         raise HTTPException(
@@ -1325,12 +1672,47 @@ async def sync_printer_videos(
         files = await client.get_timelapse_files()
         logger.info(f"Found {len(files)} timelapse files on printer '{printer.name}'")
 
-        synced_count = 0
+        # Categorize files by extension
+        VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+        IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
+        ZIP_EXTENSIONS = {".zip"}
+
+        videos = []
+        images = []
+        zips = []
+
         for file_info in files:
             filename = file_info.get("path", file_info.get("filename", ""))
             if not filename:
                 continue
+            
+            ext = os.path.splitext(filename)[1].lower()
+            if ext in VIDEO_EXTENSIONS:
+                videos.append(file_info)
+            elif ext in IMAGE_EXTENSIONS:
+                images.append(file_info)
+            elif ext in ZIP_EXTENSIONS:
+                zips.append(file_info)
+            else:
+                logger.debug(f"Skipping unknown file type: {filename}")
 
+        logger.info(
+            f"Categorized files: {len(videos)} videos, {len(images)} images, {len(zips)} zips"
+        )
+
+        # Build thumbnail lookup: base_name -> image_path
+        thumbnail_lookup = {}
+        for img_info in images:
+            filename = img_info.get("path", img_info.get("filename", ""))
+            base_name = os.path.splitext(filename)[0]
+            thumbnail_lookup[base_name] = filename
+
+        # Sync videos
+        video_synced = 0
+        video_skipped = 0
+        for file_info in videos:
+            filename = file_info.get("path", file_info.get("filename", ""))
+            
             # Check if video already exists
             existing = db.query(Video).filter(
                 Video.printer_id == printer.id,
@@ -1338,8 +1720,25 @@ async def sync_printer_videos(
             ).first()
 
             if existing:
-                logger.debug(f"Video '{filename}' already exists, skipping")
+                video_skipped += 1
                 continue
+
+            # Parse modified timestamp from Moonraker
+            modified_timestamp = file_info.get("modified", 0)
+            modified_at = None
+            if modified_timestamp:
+                try:
+                    modified_at = datetime.fromtimestamp(float(modified_timestamp))
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Could not parse modified timestamp for '{filename}': {e}")
+
+            # Look for thumbnail
+            base_name = os.path.splitext(filename)[0]
+            thumbnail_filename = thumbnail_lookup.get(base_name)
+            thumbnail_path = None
+            if thumbnail_filename:
+                thumbnail_path = f"{printer.moonraker_url}/server/files/timelapse/{thumbnail_filename}"
+                logger.info(f"Found thumbnail for '{filename}': {thumbnail_filename}")
 
             # Create video record
             video = Video(
@@ -1347,25 +1746,73 @@ async def sync_printer_videos(
                 filename=filename,
                 original_path=f"{printer.moonraker_url}/server/files/timelapse/{filename}",
                 size_bytes=file_info.get("size", 0),
-                duration_seconds=0,  # Will be updated after download
+                duration_seconds=0,
                 width=0,
                 height=0,
                 fps=0,
+                modified_at=modified_at,
+                thumbnail_path=thumbnail_path,
                 moonraker_metadata_json=file_info,
             )
             db.add(video)
-            synced_count += 1
+            video_synced += 1
             logger.info(f"Added video '{filename}' to database")
 
+        # Sync zip archives
+        zip_synced = 0
+        zip_skipped = 0
+        for file_info in zips:
+            filename = file_info.get("path", file_info.get("filename", ""))
+            
+            # Check if zip already exists
+            existing = db.query(ZipArchive).filter(
+                ZipArchive.printer_id == printer.id,
+                ZipArchive.filename == filename,
+            ).first()
+
+            if existing:
+                zip_skipped += 1
+                continue
+
+            # Parse modified timestamp
+            modified_timestamp = file_info.get("modified", 0)
+            modified_at = None
+            if modified_timestamp:
+                try:
+                    modified_at = datetime.fromtimestamp(float(modified_timestamp))
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Could not parse modified timestamp for '{filename}': {e}")
+
+            # Create zip record
+            zip_archive = ZipArchive(
+                printer_id=printer.id,
+                filename=filename,
+                original_path=f"{printer.moonraker_url}/server/files/timelapse/{filename}",
+                size_bytes=file_info.get("size", 0),
+                modified_at=modified_at,
+                moonraker_metadata_json=file_info,
+            )
+            db.add(zip_archive)
+            zip_synced += 1
+            logger.info(f"Added zip archive '{filename}' to database")
+
         db.commit()
-        logger.info(f"Sync completed for printer '{printer.name}': {synced_count} new videos")
+        logger.info(
+            f"Sync completed for printer '{printer.name}': "
+            f"{video_synced} new videos, {video_skipped} video skipped, "
+            f"{zip_synced} new zips, {zip_skipped} zip skipped"
+        )
 
         return {
             "message": "Sync completed",
             "printer_id": printer_id,
             "printer_name": printer.name,
-            "synced_videos": synced_count,
+            "synced_videos": video_synced,
+            "skipped_videos": video_skipped,
+            "synced_zips": zip_synced,
+            "skipped_zips": zip_skipped,
             "total_files_found": len(files),
+            "last_sync": datetime.utcnow().isoformat(),
         }
 
     except HTTPException:

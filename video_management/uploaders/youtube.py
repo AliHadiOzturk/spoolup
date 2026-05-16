@@ -64,11 +64,25 @@ class QuotaTracker:
         self.used = 0
         self.operations: List[Dict[str, Any]] = []
 
-    def record(self, operation: str, cost: int) -> None:
-        """Record quota usage for an operation."""
+    def record(self, operation: str, cost: int, success: bool = True) -> None:
+        """Record quota usage for an operation.
+
+        Args:
+            operation: API operation name.
+            cost: Quota cost of the operation.
+            success: Whether the request succeeded or failed.
+        """
         self.used += cost
-        self.operations.append({"operation": operation, "cost": cost})
-        logger.info(f"Quota used: {cost} for {operation} (total: {self.used}/{self.daily_limit})")
+        self.operations.append({
+            "operation": operation,
+            "cost": cost,
+            "success": success,
+        })
+        status = "succeeded" if success else "failed"
+        logger.info(
+            f"Quota used: {cost} for {operation} ({status}) "
+            f"(total: {self.used}/{self.daily_limit})"
+        )
 
     def get_remaining(self) -> int:
         """Get remaining quota for the day."""
@@ -103,20 +117,47 @@ class YouTubeUploader:
         self.token_path: Optional[str] = None
         self.quota_tracker = QuotaTracker(daily_limit=quota_limit)
 
+    @classmethod
+    def list_accounts(cls, data_dir: str = "data") -> List[str]:
+        """List available YouTube account names from token files.
+
+        Args:
+            data_dir: Directory containing token files.
+
+        Returns:
+            List of account names (extracted from youtube_token_{name}.json filenames).
+        """
+        accounts = []
+        if not os.path.exists(data_dir):
+            return accounts
+
+        for filename in os.listdir(data_dir):
+            if filename.startswith("youtube_token_") and filename.endswith(".json"):
+                account_name = filename[len("youtube_token_"): -len(".json")]
+                accounts.append(account_name)
+
+        return sorted(accounts)
+
     def authenticate(
         self,
         client_secrets_path: str,
         token_path: str = "youtube_token.json",
+        account_name: Optional[str] = None,
     ) -> bool:
         """Authenticate with YouTube using OAuth2 flow.
 
         Args:
             client_secrets_path: Path to client secrets JSON file.
             token_path: Path to save/load authentication token.
+            account_name: Optional account name for multi-account support.
+                          If provided, token is stored at data/youtube_token_{account_name}.json
 
         Returns:
             True if authentication successful, False otherwise.
         """
+        if account_name:
+            token_path = f"data/youtube_token_{account_name}.json"
+
         self.token_path = token_path
 
         # Check if token already exists
@@ -205,7 +246,12 @@ class YouTubeUploader:
         tags: Optional[List[str]] = None,
         category_id: str = "22",
         privacy_status: str = "private",
-    ) -> Optional[str]:
+        thumbnail_path: Optional[str] = None,
+        language: str = "en",
+        license: str = "youtube",
+        embeddable: bool = True,
+        public_stats_viewable: bool = True,
+    ) -> tuple[bool, Optional[str], Optional[dict]]:
         """Upload a video to YouTube.
 
         Args:
@@ -215,26 +261,29 @@ class YouTubeUploader:
             tags: List of tags.
             category_id: YouTube category ID.
             privacy_status: Privacy status (private, unlisted, public).
+            thumbnail_path: Optional path to thumbnail image to auto-upload after video.
+            language: Default language for the video (e.g., "en").
+            license: Video license ("youtube" or "creativeCommon").
+            embeddable: Whether the video can be embedded on other sites.
+            public_stats_viewable: Whether video statistics are publicly viewable.
 
         Returns:
-            Video ID if upload successful, None otherwise.
+            Tuple of (success: bool, video_id: Optional[str], error: Optional[dict]).
         """
         if not self._check_service():
-            return None
+            return False, None, {"code": "SERVICE_NOT_INITIALIZED", "message": "YouTube service not initialized"}
 
         if not self._check_quota("videos.insert"):
-            return None
+            return False, None, {"code": "QUOTA_EXCEEDED", "message": "API quota exceeded"}
 
         if not os.path.exists(video_path):
-            logger.error(f"Video file not found: {video_path}")
-            return None
+            error = {"code": "FILE_NOT_FOUND", "message": f"Video file not found: {video_path}"}
+            logger.error(error["message"])
+            return False, None, error
 
         try:
             # Check if this is a Short
             is_short = self._is_short(video_path, title)
-            if is_short and "#Shorts" not in title:
-                title = f"{title} #Shorts"
-                logger.info("Detected YouTube Shorts format, added #Shorts to title")
 
             body = {
                 "snippet": {
@@ -242,9 +291,13 @@ class YouTubeUploader:
                     "description": description,
                     "tags": tags or [],
                     "categoryId": category_id,
+                    "defaultLanguage": language,
                 },
                 "status": {
                     "privacyStatus": privacy_status,
+                    "license": license,
+                    "embeddable": embeddable,
+                    "publicStatsViewable": public_stats_viewable,
                 },
             }
 
@@ -262,22 +315,32 @@ class YouTubeUploader:
 
             response = None
             while response is None:
-                status, response = request.next_chunk()
-                if status:
-                    logger.info(f"Upload progress: {int(status.progress() * 100)}%")
+                upload_status, response = request.next_chunk()
+                if upload_status:
+                    logger.info(f"Upload progress: {int(upload_status.progress() * 100)}%")
 
             video_id = response["id"]
-            self.quota_tracker.record("videos.insert", QUOTA_COSTS["videos.insert"])
+            self.quota_tracker.record("videos.insert", QUOTA_COSTS["videos.insert"], success=True)
             logger.info(f"Upload complete. Video ID: {video_id}")
 
-            return video_id
+            # Auto-upload thumbnail if provided
+            if thumbnail_path and os.path.exists(thumbnail_path):
+                thumb_success, thumb_error = self.upload_thumbnail(video_id, thumbnail_path)
+                if not thumb_success:
+                    logger.warning(f"Thumbnail upload failed: {thumb_error}")
+
+            return True, video_id, None
 
         except HttpError as e:
-            logger.error(f"Upload failed: {e.resp.status} - {e._get_reason()}")
-            return None
+            error_info = self._parse_http_error(e)
+            self.quota_tracker.record("videos.insert", QUOTA_COSTS["videos.insert"], success=False)
+            logger.error(f"Upload failed: {error_info['code']} - {error_info['message']}")
+            return False, None, error_info
         except Exception as e:
+            error = {"code": "UNKNOWN_ERROR", "message": str(e)}
+            self.quota_tracker.record("videos.insert", QUOTA_COSTS["videos.insert"], success=False)
             logger.error(f"Upload failed: {e}")
-            return None
+            return False, None, error
 
     def _is_short(self, video_path: str, title: str) -> bool:
         """Check if video qualifies as a YouTube Short.
@@ -383,9 +446,12 @@ class YouTubeUploader:
             return result
 
         except HttpError as e:
-            logger.error(f"Status check failed: {e.resp.status} - {e._get_reason()}")
+            error_info = self._parse_http_error(e)
+            self.quota_tracker.record("videos.list", QUOTA_COSTS["videos.list"], success=False)
+            logger.error(f"Status check failed: {error_info['code']} - {error_info['message']}")
             return None
         except Exception as e:
+            self.quota_tracker.record("videos.list", QUOTA_COSTS["videos.list"], success=False)
             logger.error(f"Status check failed: {e}")
             return None
 
@@ -435,9 +501,12 @@ class YouTubeUploader:
             return result
 
         except HttpError as e:
-            logger.error(f"Analytics retrieval failed: {e.resp.status} - {e._get_reason()}")
+            error_info = self._parse_http_error(e)
+            self.quota_tracker.record("videos.list", QUOTA_COSTS["videos.list"], success=False)
+            logger.error(f"Analytics retrieval failed: {error_info['code']} - {error_info['message']}")
             return None
         except Exception as e:
+            self.quota_tracker.record("videos.list", QUOTA_COSTS["videos.list"], success=False)
             logger.error(f"Analytics retrieval failed: {e}")
             return None
 
@@ -502,9 +571,12 @@ class YouTubeUploader:
             return True
 
         except HttpError as e:
-            logger.error(f"Metadata update failed: {e.resp.status} - {e._get_reason()}")
+            error_info = self._parse_http_error(e)
+            self.quota_tracker.record("videos.update", QUOTA_COSTS["videos.update"], success=False)
+            logger.error(f"Metadata update failed: {error_info['code']} - {error_info['message']}")
             return False
         except Exception as e:
+            self.quota_tracker.record("videos.update", QUOTA_COSTS["videos.update"], success=False)
             logger.error(f"Metadata update failed: {e}")
             return False
 
@@ -526,3 +598,346 @@ class YouTubeUploader:
             Category ID string.
         """
         return CATEGORY_IDS.get(category_name.lower(), "22")
+
+    def _parse_http_error(self, error: HttpError) -> dict:
+        """Parse Google API HttpError into a structured dict.
+
+        Args:
+            error: HttpError from googleapiclient.
+
+        Returns:
+            Dict with 'code' and 'message' keys.
+        """
+        try:
+            error_details = json.loads(error.content.decode())
+            error_info = error_details.get("error", {})
+            return {
+                "code": error_info.get("code", error.resp.status),
+                "message": error_info.get("message", error._get_reason()),
+            }
+        except Exception:
+            return {
+                "code": error.resp.status,
+                "message": error._get_reason(),
+            }
+
+    def upload_thumbnail(self, video_id: str, thumbnail_path: str) -> tuple[bool, Optional[dict]]:
+        """Upload a custom thumbnail for a video.
+
+        Args:
+            video_id: YouTube video ID.
+            thumbnail_path: Path to thumbnail image file.
+
+        Returns:
+            Tuple of (success: bool, error: Optional[dict]).
+        """
+        if not self._check_service():
+            return False, {"code": "SERVICE_NOT_INITIALIZED", "message": "YouTube service not initialized"}
+
+        if not os.path.exists(thumbnail_path):
+            return False, {"code": "FILE_NOT_FOUND", "message": f"Thumbnail not found: {thumbnail_path}"}
+
+        try:
+            self.service.thumbnails().set(
+                videoId=video_id,
+                media_body=MediaFileUpload(thumbnail_path),
+            ).execute()
+
+            self.quota_tracker.record("thumbnails.set", 50, success=True)
+            logger.info(f"Thumbnail uploaded for video {video_id}")
+            return True, None
+
+        except HttpError as e:
+            error_info = self._parse_http_error(e)
+            self.quota_tracker.record("thumbnails.set", 50, success=False)
+            logger.error(f"Thumbnail upload failed: {error_info['code']} - {error_info['message']}")
+            return False, error_info
+        except Exception as e:
+            error = {"code": "UNKNOWN_ERROR", "message": str(e)}
+            self.quota_tracker.record("thumbnails.set", 50, success=False)
+            logger.error(f"Thumbnail upload failed: {e}")
+            return False, error
+
+    def add_to_playlist(self, video_id: str, playlist_id: str) -> tuple[bool, Optional[dict]]:
+        """Add a video to a playlist.
+
+        Args:
+            video_id: YouTube video ID.
+            playlist_id: YouTube playlist ID.
+
+        Returns:
+            Tuple of (success: bool, error: Optional[dict]).
+        """
+        if not self._check_service():
+            return False, {"code": "SERVICE_NOT_INITIALIZED", "message": "YouTube service not initialized"}
+
+        try:
+            body = {
+                "snippet": {
+                    "playlistId": playlist_id,
+                    "resourceId": {
+                        "kind": "youtube#video",
+                        "videoId": video_id,
+                    },
+                },
+            }
+
+            self.service.playlistItems().insert(
+                part="snippet",
+                body=body,
+            ).execute()
+
+            self.quota_tracker.record("playlistItems.insert", 50, success=True)
+            logger.info(f"Video {video_id} added to playlist {playlist_id}")
+            return True, None
+
+        except HttpError as e:
+            error_info = self._parse_http_error(e)
+            self.quota_tracker.record("playlistItems.insert", 50, success=False)
+            logger.error(f"Add to playlist failed: {error_info['code']} - {error_info['message']}")
+            return False, error_info
+        except Exception as e:
+            error = {"code": "UNKNOWN_ERROR", "message": str(e)}
+            self.quota_tracker.record("playlistItems.insert", 50, success=False)
+            logger.error(f"Add to playlist failed: {e}")
+            return False, error
+
+    def set_end_screen(self, video_id: str, template_id: str) -> tuple[bool, Optional[dict]]:
+        """Set an end screen for a video.
+
+        Args:
+            video_id: YouTube video ID.
+            template_id: End screen template ID.
+
+        Returns:
+            Tuple of (success: bool, error: Optional[dict]).
+        """
+        logger.warning("set_end_screen is not yet implemented")
+        return False, {"code": "NOT_IMPLEMENTED", "message": "End screen setting is not yet implemented"}
+
+    def update_privacy_status(self, video_id: str, privacy_status: str) -> tuple[bool, Optional[dict]]:
+        """Update the privacy status of a video.
+
+        Args:
+            video_id: YouTube video ID.
+            privacy_status: New privacy status (private, unlisted, public).
+
+        Returns:
+            Tuple of (success: bool, error: Optional[dict]).
+        """
+        if not self._check_service():
+            return False, {"code": "SERVICE_NOT_INITIALIZED", "message": "YouTube service not initialized"}
+
+        if not self._check_quota("videos.update"):
+            return False, {"code": "QUOTA_EXCEEDED", "message": "API quota exceeded"}
+
+        try:
+            body = {
+                "id": video_id,
+                "status": {
+                    "privacyStatus": privacy_status,
+                },
+            }
+
+            self.service.videos().update(
+                part="status",
+                body=body,
+            ).execute()
+
+            self.quota_tracker.record("videos.update", QUOTA_COSTS["videos.update"], success=True)
+            logger.info(f"Updated privacy status for video {video_id} to {privacy_status}")
+            return True, None
+
+        except HttpError as e:
+            error_info = self._parse_http_error(e)
+            self.quota_tracker.record("videos.update", QUOTA_COSTS["videos.update"], success=False)
+            logger.error(f"Privacy update failed: {error_info['code']} - {error_info['message']}")
+            return False, error_info
+        except Exception as e:
+            error = {"code": "UNKNOWN_ERROR", "message": str(e)}
+            self.quota_tracker.record("videos.update", QUOTA_COSTS["videos.update"], success=False)
+            logger.error(f"Privacy update failed: {e}")
+            return False, error
+
+    def delete_video(self, video_id: str) -> tuple[bool, Optional[dict]]:
+        """Delete a video from YouTube.
+
+        Args:
+            video_id: YouTube video ID.
+
+        Returns:
+            Tuple of (success: bool, error: Optional[dict]).
+        """
+        if not self._check_service():
+            return False, {"code": "SERVICE_NOT_INITIALIZED", "message": "YouTube service not initialized"}
+
+        try:
+            self.service.videos().delete(id=video_id).execute()
+
+            self.quota_tracker.record("videos.delete", 50, success=True)
+            logger.info(f"Video {video_id} deleted")
+            return True, None
+
+        except HttpError as e:
+            error_info = self._parse_http_error(e)
+            self.quota_tracker.record("videos.delete", 50, success=False)
+            logger.error(f"Delete failed: {error_info['code']} - {error_info['message']}")
+            return False, error_info
+        except Exception as e:
+            error = {"code": "UNKNOWN_ERROR", "message": str(e)}
+            self.quota_tracker.record("videos.delete", 50, success=False)
+            logger.error(f"Delete failed: {e}")
+            return False, error
+
+    def list_playlists(self) -> tuple[Optional[List[dict]], Optional[dict]]:
+        """List the authenticated user's playlists.
+
+        Returns:
+            Tuple of (playlists: Optional[List[dict]], error: Optional[dict]).
+        """
+        if not self._check_service():
+            return None, {"code": "SERVICE_NOT_INITIALIZED", "message": "YouTube service not initialized"}
+
+        if not self._check_quota("playlists.list"):
+            return None, {"code": "QUOTA_EXCEEDED", "message": "API quota exceeded"}
+
+        try:
+            playlists = []
+            request = self.service.playlists().list(
+                part="snippet,status",
+                mine=True,
+                maxResults=50,
+            )
+
+            while request:
+                response = request.execute()
+                for item in response.get("items", []):
+                    snippet = item.get("snippet", {})
+                    status = item.get("status", {})
+                    playlists.append({
+                        "id": item["id"],
+                        "title": snippet.get("title", ""),
+                        "description": snippet.get("description", ""),
+                        "privacy_status": status.get("privacyStatus", "unknown"),
+                    })
+                request = self.service.playlists().list_next(request, response)
+
+            self.quota_tracker.record("playlists.list", 1, success=True)
+            logger.info(f"Listed {len(playlists)} playlists")
+            return playlists, None
+
+        except HttpError as e:
+            error_info = self._parse_http_error(e)
+            self.quota_tracker.record("playlists.list", 1, success=False)
+            logger.error(f"List playlists failed: {error_info['code']} - {error_info['message']}")
+            return None, error_info
+        except Exception as e:
+            error = {"code": "UNKNOWN_ERROR", "message": str(e)}
+            self.quota_tracker.record("playlists.list", 1, success=False)
+            logger.error(f"List playlists failed: {e}")
+            return None, error
+
+    def create_playlist(
+        self,
+        title: str,
+        description: str = "",
+        privacy_status: str = "private",
+    ) -> tuple[Optional[str], Optional[dict]]:
+        """Create a new playlist.
+
+        Args:
+            title: Playlist title.
+            description: Playlist description.
+            privacy_status: Privacy status (private, unlisted, public).
+
+        Returns:
+            Tuple of (playlist_id: Optional[str], error: Optional[dict]).
+        """
+        if not self._check_service():
+            return None, {"code": "SERVICE_NOT_INITIALIZED", "message": "YouTube service not initialized"}
+
+        try:
+            body = {
+                "snippet": {
+                    "title": title,
+                    "description": description,
+                },
+                "status": {
+                    "privacyStatus": privacy_status,
+                },
+            }
+
+            response = self.service.playlists().insert(
+                part="snippet,status",
+                body=body,
+            ).execute()
+
+            playlist_id = response["id"]
+            self.quota_tracker.record("playlists.insert", 50, success=True)
+            logger.info(f"Playlist created: {playlist_id}")
+            return playlist_id, None
+
+        except HttpError as e:
+            error_info = self._parse_http_error(e)
+            self.quota_tracker.record("playlists.insert", 50, success=False)
+            logger.error(f"Create playlist failed: {error_info['code']} - {error_info['message']}")
+            return None, error_info
+        except Exception as e:
+            error = {"code": "UNKNOWN_ERROR", "message": str(e)}
+            self.quota_tracker.record("playlists.insert", 50, success=False)
+            logger.error(f"Create playlist failed: {e}")
+            return None, error
+
+    def get_account_info(self) -> tuple[Optional[dict], Optional[dict]]:
+        """Get information about the authenticated YouTube channel.
+
+        Returns:
+            Tuple of (info: Optional[dict], error: Optional[dict]).
+            Info dict contains 'channel_title', 'subscriber_count', etc.
+        """
+        if not self._check_service():
+            return None, {"code": "SERVICE_NOT_INITIALIZED", "message": "YouTube service not initialized"}
+
+        if not self._check_quota("channels.list"):
+            return None, {"code": "QUOTA_EXCEEDED", "message": "API quota exceeded"}
+
+        try:
+            response = self.service.channels().list(
+                part="snippet,statistics",
+                mine=True,
+            ).execute()
+
+            self.quota_tracker.record("channels.list", QUOTA_COSTS["channels.list"], success=True)
+
+            if not response.get("items"):
+                return None, {"code": "CHANNEL_NOT_FOUND", "message": "No channel found for authenticated user"}
+
+            channel = response["items"][0]
+            snippet = channel.get("snippet", {})
+            stats = channel.get("statistics", {})
+
+            info = {
+                "channel_title": snippet.get("title", ""),
+                "channel_id": channel.get("id", ""),
+                "subscriber_count": int(stats.get("subscriberCount", 0)),
+                "video_count": int(stats.get("videoCount", 0)),
+                "view_count": int(stats.get("viewCount", 0)),
+            }
+
+            logger.info(
+                f"Channel: {info['channel_title']} - "
+                f"{info['subscriber_count']} subscribers, "
+                f"{info['video_count']} videos"
+            )
+            return info, None
+
+        except HttpError as e:
+            error_info = self._parse_http_error(e)
+            self.quota_tracker.record("channels.list", QUOTA_COSTS["channels.list"], success=False)
+            logger.error(f"Get account info failed: {error_info['code']} - {error_info['message']}")
+            return None, error_info
+        except Exception as e:
+            error = {"code": "UNKNOWN_ERROR", "message": str(e)}
+            self.quota_tracker.record("channels.list", QUOTA_COSTS["channels.list"], success=False)
+            logger.error(f"Get account info failed: {e}")
+            return None, error

@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+
+{% block title %}Zip Archives - Video Management System{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Zip Archives</h1>
+    <p>Frame archives from Moonraker timelapse</p>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <div class="header-actions">
+            <button id="refresh-zips-btn" class="btn btn-secondary">
+                <span></span> Refresh
+            </button>
+        </div>
+    </div>
+
+    <div id="zips-table-container">
+        <!-- Zip archives will be loaded here -->
+    </div>
+
+    <div id="empty-state" style="display: none; text-align: center; padding: 3rem;">
+        <div style="font-size: 3rem; margin-bottom: 1rem;"></div>
+        <h3>No zip archives found</h3>
+        <p>Zip archives will appear here after syncing from your printer.</p>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    loadZips();
+
+    document.getElementById('refresh-zips-btn').addEventListener('click', function() {
+        loadZips();
+    });
+});
+
+async function loadZips() {
+    try {
+        const response = await fetch('/api/zips/', {
+            headers: {
+                'Authorization': 'Bearer ' + localStorage.getItem('token')
+            }
+        });
+
+        if (!response.ok) {
+            if (response.status === 401) {
+                window.location.href = '/login';
+                return;
+            }
+            throw new Error('Failed to load zip archives');
+        }
+
+        const zips = await response.json();
+        renderZips(zips);
+    } catch (error) {
+        console.error('Error loading zip archives:', error);
+        showToast('Failed to load zip archives', 'error');
+    }
+}
+
+function renderZips(zips) {
+    const container = document.getElementById('zips-table-container');
+    const emptyState = document.getElementById('empty-state');
+
+    if (!zips || zips.length === 0) {
+        container.style.display = 'none';
+        emptyState.style.display = 'block';
+        return;
+    }
+
+    container.style.display = 'block';
+    emptyState.style.display = 'none';
+
+    let html = '<table class="table">';
+    html += '<thead><tr>';
+    html += '<th>Filename</th>';
+    html += '<th>Size</th>';
+    html += '<th>Modified</th>';
+    html += '<th>Actions</th>';
+    html += '</tr></thead><tbody>';
+
+    zips.forEach(zip => {
+        const size = formatFileSize(zip.size_bytes);
+        const date = zip.modified_at ? window.app.formatDate(new Date(zip.modified_at)) : 'Unknown';
+
+        html += '<tr>';
+        html += `<td>
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <span style="font-size: 1.2rem;">📦</span>
+                <span>${escapeHtml(zip.filename)}</span>
+            </div>
+        </td>`;
+        html += `<td>${size}</td>`;
+        html += `<td>${date}</td>`;
+        html += `<td>
+            <a href="${zip.original_path}" target="_blank" class="btn btn-sm btn-primary">Download</a>
+        </td>`;
+        html += '</tr>';
+    });
+
+    html += '</tbody></table>';
+    container.innerHTML = html;
+}
+
+function formatFileSize(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function showToast(message, type) {
+    if (window.app && window.app.showToast) {
+        window.app.showToast(message, type);
+    } else {
+        alert(message);
+    }
+}
+</script>
+{% endblock %}

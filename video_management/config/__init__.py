@@ -47,6 +47,26 @@ class Settings(BaseSettings):
     admin_password: Optional[str] = None  # Required if admin_username is set
     max_login_attempts: int = 5  # Failed attempts before temporary lock
     
+    # Feature Flags
+    enable_tiktok_upload: bool = False
+    enable_post_processing: bool = True
+    enable_bulk_operations: bool = False
+    
+    # Upload Settings
+    max_concurrent_uploads: int = 1
+    max_upload_retries: int = 3
+    upload_chunk_size: int = 5 * 1024 * 1024  # 5MB
+    
+    # Processing Defaults
+    default_zoom_level: float = 1.0
+    default_target_duration: int = 60
+    default_crop_mode: str = "center"
+    
+    # Logging
+    log_level: str = "INFO"
+    log_format: str = "text"  # "text" or "json"
+    log_rotation_days: int = 30
+    
     class Config:
         env_file = f"{BASE_DIR}/.env"
 

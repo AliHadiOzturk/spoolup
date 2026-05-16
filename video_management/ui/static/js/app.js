@@ -13,13 +13,11 @@ class VideoManagementApp {
     }
 
     setupEventListeners() {
-        // Login form
         const loginForm = document.getElementById('login-form');
         if (loginForm) {
             loginForm.addEventListener('submit', (e) => this.handleLogin(e));
         }
 
-        // Logout button
         const logoutBtn = document.getElementById('logout-btn');
         if (logoutBtn) {
             logoutBtn.addEventListener('click', () => this.handleLogout());
@@ -53,9 +51,11 @@ class VideoManagementApp {
             } else {
                 const error = await response.json();
                 this.showAlert(error.detail || 'Login failed', 'error');
+                this.showToast(error.detail || 'Login failed', 'error');
             }
         } catch (err) {
             this.showAlert('Network error', 'error');
+            this.showToast('Network error', 'error');
         }
     }
 
@@ -74,17 +74,33 @@ class VideoManagementApp {
             headers['Authorization'] = `Bearer ${this.token}`;
         }
 
-        const response = await fetch(url, {
-            ...options,
-            headers,
-        });
+        try {
+            const response = await fetch(url, {
+                ...options,
+                headers,
+            });
 
-        if (response.status === 401) {
-            this.handleLogout();
-            return null;
+            if (response.status === 401) {
+                this.handleLogout();
+                return null;
+            }
+
+            if (!response.ok) {
+                let errorMessage = `Request failed: ${response.status}`;
+                try {
+                    const errorData = await response.json();
+                    errorMessage = errorData.detail || errorData.message || errorMessage;
+                } catch (_) {
+                    // response body wasn't JSON
+                }
+                this.showToast(errorMessage, 'error');
+            }
+
+            return response;
+        } catch (err) {
+            this.showToast('Network error: ' + (err.message || 'Unable to connect'), 'error');
+            throw err;
         }
-
-        return response;
     }
 
     showAlert(message, type = 'error') {
@@ -98,12 +114,48 @@ class VideoManagementApp {
         setTimeout(() => alertDiv.remove(), 5000);
     }
 
+    showToast(message, type = 'info') {
+        const container = document.getElementById('toast-container');
+        if (!container) return;
+
+        const toast = document.createElement('div');
+        const colors = {
+            success: 'rgba(16, 185, 129, 0.95)',
+            error: 'rgba(239, 68, 68, 0.95)',
+            warning: 'rgba(245, 158, 11, 0.95)',
+            info: 'rgba(59, 130, 246, 0.95)',
+        };
+        const color = colors[type] || colors.info;
+
+        toast.style.cssText = `
+            background: ${color};
+            color: white;
+            padding: 0.875rem 1.25rem;
+            border-radius: 8px;
+            font-weight: 500;
+            font-size: 0.875rem;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
+            pointer-events: auto;
+            animation: fadeIn 0.2s ease-out;
+            max-width: 400px;
+        `;
+        toast.textContent = message;
+
+        container.appendChild(toast);
+
+        setTimeout(() => {
+            toast.style.animation = 'fadeOut 0.2s ease-out';
+            toast.addEventListener('animationend', () => toast.remove());
+            setTimeout(() => toast.remove(), 250);
+        }, 4000);
+    }
+
     formatDate(dateString) {
         return new Date(dateString).toLocaleString();
     }
 
     formatFileSize(bytes) {
-        if (bytes === 0) return '0 Bytes';
+        if (bytes === 0 || bytes === null || bytes === undefined) return '0 Bytes';
         const k = 1024;
         const sizes = ['Bytes', 'KB', 'MB', 'GB'];
         const i = Math.floor(Math.log(bytes) / Math.log(k));
@@ -111,9 +163,17 @@ class VideoManagementApp {
     }
 
     formatDuration(seconds) {
-        const mins = Math.floor(seconds / 60);
+        if (!seconds || seconds <= 0) return '0s';
+        const hours = Math.floor(seconds / 3600);
+        const mins = Math.floor((seconds % 3600) / 60);
         const secs = Math.floor(seconds % 60);
-        return `${mins}:${secs.toString().padStart(2, '0')}`;
+        if (hours > 0) {
+            return `${hours}h ${mins}m`;
+        }
+        if (mins > 0) {
+            return `${mins}m ${secs}s`;
+        }
+        return `${secs}s`;
     }
 }
 

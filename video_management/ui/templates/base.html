@@ -17,9 +17,16 @@
             <li><a href="/" class="{% if request.url.path == '/' %}active{% endif %}">Home</a></li>
             <li><a href="/dashboard" class="{% if request.url.path == '/dashboard' %}active{% endif %}">Dashboard</a></li>
             <li><a href="/videos" class="{% if request.url.path == '/videos' or request.url.path.startswith('/videos/') %}active{% endif %}">Videos</a></li>
+            <li><a href="/zips" class="{% if request.url.path == '/zips' %}active{% endif %}">Archives</a></li>
             <li><a href="/uploads" class="{% if request.url.path == '/uploads' %}active{% endif %}">Uploads</a></li>
             <li><a href="/analytics" class="{% if request.url.path == '/analytics' %}active{% endif %}">Analytics</a></li>
             <li><a href="/printers" class="{% if request.url.path == '/printers' %}active{% endif %}">Printers</a></li>
+            <li>
+                <a href="#" id="notifications-btn" title="Notifications" style="position: relative;">
+                    <span id="notification-bell">🔔</span>
+                    <span id="notification-badge" style="display: none; position: absolute; top: 2px; right: 2px; width: 8px; height: 8px; background: var(--error-color); border-radius: 50%;"></span>
+                </a>
+            </li>
             <li><a href="#" id="logout-btn">Logout</a></li>
         </ul>
     </nav>
@@ -28,7 +35,16 @@
         {% block content %}{% endblock %}
     </div>
 
+    <div id="toast-container" style="position: fixed; top: 80px; right: 20px; z-index: 1000; display: flex; flex-direction: column; gap: 0.5rem; pointer-events: none;"></div>
+
     <script src="/static/js/app.js"></script>
+    <script>
+    window.showToast = function(message, type) {
+        if (window.app && window.app.showToast) {
+            window.app.showToast(message, type);
+        }
+    };
+    </script>
     {% block extra_js %}{% endblock %}
 </body>
 </html>

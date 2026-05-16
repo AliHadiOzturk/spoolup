@@ -8,29 +8,48 @@
     <p>Overview of your video management system</p>
 </div>
 
-<div id="stats-container" class="grid">
+<div class="grid">
     <div class="card stat-card">
-        <div class="loading-skeleton" style="height: 60px; width: 80px; margin: 0 auto;"></div>
-        <div class="loading-skeleton" style="height: 20px; width: 120px; margin: 10px auto 0;"></div>
+        <div class="stat-value" id="stat-total-videos">—</div>
+        <div class="stat-label">Total Videos</div>
     </div>
     <div class="card stat-card">
-        <div class="loading-skeleton" style="height: 60px; width: 80px; margin: 0 auto;"></div>
-        <div class="loading-skeleton" style="height: 20px; width: 120px; margin: 10px auto 0;"></div>
+        <div class="stat-value" id="stat-pending-uploads">—</div>
+        <div class="stat-label">Pending Uploads</div>
     </div>
     <div class="card stat-card">
-        <div class="loading-skeleton" style="height: 60px; width: 80px; margin: 0 auto;"></div>
-        <div class="loading-skeleton" style="height: 20px; width: 120px; margin: 10px auto 0;"></div>
+        <div class="stat-value" id="stat-published">—</div>
+        <div class="stat-label">Published Videos</div>
     </div>
     <div class="card stat-card">
-        <div class="loading-skeleton" style="height: 60px; width: 80px; margin: 0 auto;"></div>
-        <div class="loading-skeleton" style="height: 20px; width: 120px; margin: 10px auto 0;"></div>
+        <div class="stat-value" id="stat-total-views">—</div>
+        <div class="stat-label">Total Views</div>
     </div>
 </div>
 
 <div class="grid mt-4">
-    <div class="card">
-        <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">Recent Uploads</h2>
-        <div id="recent-uploads">
+    <div class="card" style="grid-column: 1 / -1;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 1rem;">
+            <h2 style="font-size: 1.25rem; font-weight: 600;">Quick Actions</h2>
+        </div>
+        <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
+            <button class="btn btn-primary" id="sync-from-printer-btn" onclick="dashboardManager.syncFromPrinter()">
+                <span>Sync from Printer</span>
+            </button>
+            <a href="/uploads" class="btn btn-secondary">
+                <span>Upload Queue</span>
+            </a>
+            <a href="/videos" class="btn btn-secondary">
+                <span>Manage Videos</span>
+            </a>
+        </div>
+    </div>
+</div>
+
+<div class="grid mt-4">
+    <div class="card" style="grid-column: span 2;">
+        <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">Recent Activity</h2>
+        <div id="recent-activity">
             <div class="loading-skeleton" style="height: 40px; margin-bottom: 0.5rem;"></div>
             <div class="loading-skeleton" style="height: 40px; margin-bottom: 0.5rem;"></div>
             <div class="loading-skeleton" style="height: 40px;"></div>
@@ -38,9 +57,10 @@
     </div>
 
     <div class="card">
-        <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">Platform Breakdown</h2>
-        <div id="platform-breakdown">
-            <div class="loading-skeleton" style="height: 100px;"></div>
+        <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">Platform Status</h2>
+        <div id="platform-status">
+            <div class="loading-skeleton" style="height: 80px; margin-bottom: 0.5rem;"></div>
+            <div class="loading-skeleton" style="height: 80px;"></div>
         </div>
     </div>
 </div>

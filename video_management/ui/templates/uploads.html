@@ -3,22 +3,26 @@
 {% block title %}Uploads - Video Management System{% endblock %}
 
 {% block content %}
-<h1>Uploads</h1>
-<p style="color: var(--text-secondary); margin-bottom: 1.5rem;">
-    Manage your social media uploads
-</p>
+<div class="page-header">
+    <h1>Uploads</h1>
+    <p style="color: var(--text-secondary); margin-bottom: 0;">
+        Manage your social media uploads
+    </p>
+</div>
 
 <div class="card">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-        <h2>All Uploads</h2>
-        <select id="platform-filter" class="form-control" style="width: auto;" onchange="filterUploads()">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 1rem;">
+        <h2 style="font-size: 1.25rem; font-weight: 600;">All Uploads</h2>
+        <select id="platform-filter" class="form-control" style="width: auto; min-width: 160px;" onchange="filterUploads()">
             <option value="">All Platforms</option>
             <option value="youtube">YouTube</option>
             <option value="tiktok">TikTok</option>
         </select>
     </div>
     <div id="uploads-container">
-        <p style="color: var(--text-secondary);">Loading uploads...</p>
+        <div class="loading-skeleton" style="height: 120px; margin-bottom: 0.5rem;"></div>
+        <div class="loading-skeleton" style="height: 120px; margin-bottom: 0.5rem;"></div>
+        <div class="loading-skeleton" style="height: 120px;"></div>
     </div>
 </div>
 {% endblock %}
@@ -31,60 +35,136 @@ class UploadsManager {
         this.loadUploads();
     }
 
+    getPlatformIcon(platform) {
+        const icons = {
+            youtube: '📺',
+            tiktok: '🎵',
+        };
+        return icons[platform?.toLowerCase()] || '🌐';
+    }
+
+    getStatusColor(status) {
+        switch (status) {
+            case 'completed':
+            case 'published':
+                return 'success';
+            case 'failed':
+            case 'error':
+                return 'error';
+            case 'processing':
+            case 'uploading':
+                return 'warning';
+            case 'pending':
+            case 'queued':
+                return 'info';
+            default:
+                return 'warning';
+        }
+    }
+
+    getStatusLabel(status) {
+        const labels = {
+            completed: 'Completed',
+            published: 'Published',
+            failed: 'Failed',
+            error: 'Error',
+            processing: 'Processing',
+            uploading: 'Uploading',
+            pending: 'Pending',
+            queued: 'Queued',
+        };
+        return labels[status] || status;
+    }
+
     async loadUploads() {
+        const container = document.getElementById('uploads-container');
+        container.innerHTML = `
+            <div class="loading-skeleton" style="height: 120px; margin-bottom: 0.5rem;"></div>
+            <div class="loading-skeleton" style="height: 120px; margin-bottom: 0.5rem;"></div>
+            <div class="loading-skeleton" style="height: 120px;"></div>
+        `;
+
         try {
-            const response = await window.app.apiRequest('/api/uploads');
+            const response = await window.app.apiRequest('/api/uploads/');
             if (!response) return;
 
             this.uploads = await response.json();
             this.renderUploads(this.uploads);
         } catch (err) {
             console.error('Failed to load uploads:', err);
+            container.innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-state-icon">⚠️</div>
+                    <p>Failed to load uploads</p>
+                </div>
+            `;
         }
     }
 
     renderUploads(uploads) {
         const container = document.getElementById('uploads-container');
         if (uploads.length === 0) {
-            container.innerHTML = '<p style="color: var(--text-secondary);">No uploads found</p>';
+            container.innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-state-icon">📤</div>
+                    <h3 style="margin-bottom: 0.5rem; color: var(--text-primary);">No uploads yet</h3>
+                    <p>Your upload queue is empty. Start by processing and uploading videos.</p>
+                </div>
+            `;
             return;
         }
 
-        container.innerHTML = `
-            <table class="table">
-                <thead>
-                    <tr>
-                        <th>Platform</th>
-                        <th>Title</th>
-                        <th>Status</th>
-                        <th>Uploaded</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${uploads.map(upload => `
-                        <tr>
-                            <td>${upload.platform}</td>
-                            <td>${upload.title || 'Untitled'}</td>
-                            <td><span class="badge badge-${this.getStatusClass(upload.status)}">${upload.status}</span></td>
-                            <td>${upload.uploaded_at ? window.app.formatDate(upload.uploaded_at) : 'Pending'}</td>
-                            <td>
-                                <button class="btn btn-primary btn-sm" onclick="checkStatus(${upload.id})">Check Status</button>
-                            </td>
-                        </tr>
-                    `).join('')}
-                </tbody>
-            </table>
-        `;
-    }
-
-    getStatusClass(status) {
-        switch (status) {
-            case 'completed': return 'success';
-            case 'failed': return 'error';
-            case 'processing': return 'warning';
-            default: return 'warning';
-        }
+        container.innerHTML = uploads.map(upload => `
+            <div class="card" style="margin-bottom: 0.75rem; padding: 1rem;">
+                <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 1rem;">
+                    <div style="display: flex; align-items: center; gap: 1rem; flex: 1; min-width: 200px;">
+                        <div style="font-size: 2rem; width: 48px; text-align: center;">${this.getPlatformIcon(upload.platform)}</div>
+                        <div style="flex: 1; min-width: 0;">
+                            <div style="font-weight: 600; font-size: 0.9375rem; margin-bottom: 0.25rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${upload.title || 'Untitled'}">
+                                ${upload.title || 'Untitled'}
+                            </div>
+                            <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
+                                <span class="badge badge-${this.getStatusColor(upload.status)}">
+                                    ${this.getStatusLabel(upload.status)}
+                                </span>
+                                <span style="color: var(--text-secondary); font-size: 0.8125rem;">
+                                    ${upload.platform || 'Unknown'}
+                                </span>
+                                <span style="color: var(--text-secondary); font-size: 0.8125rem;">
+                                    ${upload.uploaded_at ? window.app.formatDate(upload.uploaded_at) : 'Pending'}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        ${upload.status === 'failed' || upload.status === 'error' ? `
+                            <button class="btn btn-primary btn-sm" onclick="uploadsManager.retryUpload(${upload.id})">
+                                Retry
+                            </button>
+                        ` : ''}
+                        ${upload.status === 'pending' || upload.status === 'queued' ? `
+                            <button class="btn btn-danger btn-sm" onclick="uploadsManager.cancelUpload(${upload.id})">
+                                Cancel
+                            </button>
+                        ` : ''}
+                        <button class="btn btn-secondary btn-sm" onclick="uploadsManager.checkStatus(${upload.id})">
+                            Check Status
+                        </button>
+                    </div>
+                </div>
+                ${upload.progress !== undefined && upload.progress !== null && upload.status !== 'completed' && upload.status !== 'published' && upload.status !== 'failed' && upload.status !== 'error' ? `
+                    <div style="margin-top: 0.75rem;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 0.25rem;">
+                            <span style="font-size: 0.75rem; color: var(--text-secondary);">Progress</span>
+                            <span style="font-size: 0.75rem; color: var(--text-secondary);">${upload.progress}%</span>
+                        </div>
+                        <div style="width: 100%; height: 6px; background: var(--surface-hover); border-radius: 3px; overflow: hidden;">
+                            <div style="width: ${upload.progress}%; height: 100%; background: var(--primary-color); border-radius: 3px; transition: width 0.3s;"></div>
+                        </div>
+                    </div>
+                ` : ''}
+            </div>
+        `).join('');
     }
 
     filterByPlatform(platform) {
@@ -95,6 +175,56 @@ class UploadsManager {
             this.renderUploads(filtered);
         }
     }
+
+    async retryUpload(uploadId) {
+        try {
+            const response = await window.app.apiRequest(`/api/uploads/${uploadId}/retry`, {
+                method: 'POST'
+            });
+            if (!response) return;
+
+            if (response.ok) {
+                window.app.showToast('Upload retry initiated', 'success');
+                this.loadUploads();
+            } else {
+                const error = await response.json();
+                window.app.showToast(error.detail || 'Failed to retry upload', 'error');
+            }
+        } catch (err) {
+            window.app.showToast('Failed to retry upload', 'error');
+        }
+    }
+
+    async cancelUpload(uploadId) {
+        try {
+            const response = await window.app.apiRequest(`/api/uploads/${uploadId}/cancel`, {
+                method: 'POST'
+            });
+            if (!response) return;
+
+            if (response.ok) {
+                window.app.showToast('Upload cancelled', 'success');
+                this.loadUploads();
+            } else {
+                const error = await response.json();
+                window.app.showToast(error.detail || 'Failed to cancel upload', 'error');
+            }
+        } catch (err) {
+            window.app.showToast('Failed to cancel upload', 'error');
+        }
+    }
+
+    async checkStatus(uploadId) {
+        try {
+            const response = await window.app.apiRequest(`/api/uploads/${uploadId}/status`);
+            if (!response) return;
+
+            const upload = await response.json();
+            window.app.showToast(`Status: ${this.getStatusLabel(upload.status)}`, 'info');
+        } catch (err) {
+            window.app.showToast('Failed to check status', 'error');
+        }
+    }
 }
 
 let uploadsManager;
@@ -102,18 +232,6 @@ let uploadsManager;
 function filterUploads() {
     const platform = document.getElementById('platform-filter').value;
     uploadsManager.filterByPlatform(platform);
-}
-
-async function checkStatus(uploadId) {
-    try {
-        const response = await window.app.apiRequest(`/api/uploads/${uploadId}/status`);
-        if (!response) return;
-
-        const upload = await response.json();
-        window.app.showAlert(`Status: ${upload.status}`, 'success');
-    } catch (err) {
-        window.app.showAlert('Failed to check status', 'error');
-    }
 }
 
 document.addEventListener('DOMContentLoaded', () => {

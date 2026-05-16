@@ -230,22 +230,36 @@ class VideoProcessor:
             logger.error(f"Invalid speed factor: {speed_factor}")
             return False
 
+        has_audio = self._has_audio_stream(input_path)
         video_speed = 1.0 / speed_factor
         audio_speed = speed_factor
 
         args = [
             "-i", input_path,
             "-filter_complex",
-            f"[0:v]setpts={video_speed}*PTS[v];[0:a]atempo={audio_speed}[a]",
-            "-map", "[v]",
-            "-map", "[a]",
+        ]
+
+        if has_audio:
+            args.append(
+                f"[0:v]setpts={video_speed}*PTS[v];[0:a]atempo={audio_speed}[a]"
+            )
+            args.extend(["-map", "[v]", "-map", "[a]"])
+        else:
+            args.append(f"[0:v]setpts={video_speed}*PTS[v]")
+            args.extend(["-map", "[v]"])
+
+        args.extend([
             "-c:v", "libx264",
             "-preset", "fast",
             "-crf", "23",
-            "-c:a", "aac",
-            "-b:a", "128k",
-            output_path,
-        ]
+        ])
+
+        if has_audio:
+            args.extend(["-c:a", "aac", "-b:a", "128k"])
+        else:
+            args.append("-an")
+
+        args.append(output_path)
 
         success, error = self._run_ffmpeg(args)
         if not success:
@@ -347,6 +361,33 @@ class VideoProcessor:
         logger.info(f"Thumbnail created: {output_path}")
         return True
 
+    def _has_audio_stream(self, input_path: str) -> bool:
+        """Check if video file has an audio stream."""
+        cmd = [
+            self.ffprobe_path,
+            "-v", "quiet",
+            "-print_format", "json",
+            "-show_streams",
+            input_path,
+        ]
+        try:
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                return False
+            data = json.loads(result.stdout)
+            for stream in data.get("streams", []):
+                if stream.get("codec_type") == "audio":
+                    return True
+            return False
+        except Exception:
+            return False
+
     def process_for_shorts(
         self,
         input_path: str,
@@ -359,7 +400,8 @@ class VideoProcessor:
             input_path: Path to input video file
             output_path: Path to output video file
             options: Processing options dict with keys:
-                - crop_mode: 'center' (default), 'smart', 'split'
+                - zoom_level: float, default 1.0 (1.0 = no zoom, 3.0 = max zoom)
+                - crop_mode: 'center' (default), 'left', 'right', 'smart'
                 - target_duration: max seconds (default 60)
                 - speed_factor: playback speed multiplier
                 - add_text: overlay text
@@ -372,6 +414,7 @@ class VideoProcessor:
             return False
 
         options = options or {}
+        zoom_level = options.get("zoom_level", 1.0)
         crop_mode = options.get("crop_mode", "center")
         target_duration = options.get("target_duration", 60)
         speed_factor = options.get("speed_factor")
@@ -381,6 +424,10 @@ class VideoProcessor:
         if not info:
             logger.error("Failed to get video info")
             return False
+
+        # Check if video has audio
+        has_audio = self._has_audio_stream(input_path)
+        logger.info(f"Video has audio: {has_audio}")
 
         duration = info["duration"]
         width = info["width"]
@@ -394,33 +441,56 @@ class VideoProcessor:
         # Calculate crop for 9:16 aspect ratio
         target_aspect = 9.0 / 16.0
         current_aspect = width / height
+        
+        logger.info(
+            f"Processing with zoom={zoom_level}, crop_mode={crop_mode}, "
+            f"input={width}x{height}, target_aspect={target_aspect:.3f}"
+        )
 
-        if current_aspect > target_aspect:
-            # Video is wider than target, crop width
-            new_width = int(height * target_aspect)
-            if crop_mode == "center":
-                x_offset = (width - new_width) // 2
-                filters.append(f"crop={new_width}:{height}:{x_offset}:0")
-            elif crop_mode == "smart":
-                # Smart crop - keep left portion for now
-                filters.append(f"crop={new_width}:{height}:0:0")
-            elif crop_mode == "split":
-                # Split screen - duplicate and stack side by side
-                filters.append(f"scale={width}:{height // 2}")
-                filters.append(f"tile=1x2")
+        # Standard output resolution for YouTube Shorts
+        shorts_width = 1080
+        shorts_height = 1920
+        
+        if zoom_level == 0:
+            # Zoom 0: Standard 9:16 conversion, fill the entire frame (no extra zoom)
+            logger.info("Zoom=0: Standard 9:16 conversion, filling frame")
+            if current_aspect > target_aspect:
+                # Video is wider than 9:16, crop sides to fill frame
+                target_width = int(height * target_aspect)
+                x_offset = (width - target_width) // 2
+                filters.append(f"crop={target_width}:{height}:{x_offset}:0")
+                filters.append(f"scale={shorts_width}:{shorts_height}")
             else:
-                x_offset = (width - new_width) // 2
-                filters.append(f"crop={new_width}:{height}:{x_offset}:0")
+                # Already 9:16 or taller, just scale
+                filters.append(f"scale={shorts_width}:{shorts_height}")
+        elif current_aspect > target_aspect:
+            # Video is wider than 9:16 (e.g., 16:9), crop the sides based on zoom
+            target_width = height * target_aspect
+            crop_width = target_width / zoom_level
+
+            # Clamp crop_width
+            max_crop_width = float(width)
+            min_crop_width = target_width / 3.0
+            crop_width = max(min_crop_width, min(crop_width, max_crop_width))
+            crop_width_int = int(crop_width)
+
+            # Determine x_offset based on crop_mode
+            if crop_mode == "left":
+                x_offset = 0
+            elif crop_mode == "right":
+                x_offset = width - crop_width_int
+            elif crop_mode in ("center", "smart"):
+                x_offset = (width - crop_width_int) / 2
+            else:
+                x_offset = (width - crop_width_int) / 2
+
+            logger.info(f"Cropping {width}x{height} to {crop_width_int}x{height} (offset: {x_offset}, zoom: {zoom_level})")
+            filters.append(f"crop={crop_width_int}:{height}:{int(x_offset)}:0")
+            filters.append(f"scale={shorts_width}:{shorts_height}")
         else:
-            # Video is taller than target, pad or scale
-            new_height = int(width / target_aspect)
-            if new_height > height:
-                # Need to pad
-                y_offset = (new_height - height) // 2
-                filters.append(f"pad={width}:{new_height}:0:{y_offset}:black")
-            else:
-                # Scale to fit
-                filters.append(f"scale={width}:{new_height}")
+            # Video is already 9:16 or taller, just scale to standard resolution
+            logger.info(f"Scaling {width}x{height} to {shorts_width}x{shorts_height}")
+            filters.append(f"scale={shorts_width}:{shorts_height}")
 
         # Add text overlay if specified
         if overlay_text:
@@ -432,6 +502,9 @@ class VideoProcessor:
                 f"x=(w-text_w)/2:y=h-text_h-30"
             )
 
+        # Log the filter chain for debugging
+        logger.info(f"Filter chain: {filters}")
+        
         # Build ffmpeg command
         args = ["-i", input_path]
 
@@ -447,13 +520,21 @@ class VideoProcessor:
             else:
                 filters.append(speed_filter)
 
-            # Adjust audio speed
-            args.extend([
-                "-filter_complex",
-                f"[0:v]{','.join(filters)}[v];[0:a]atempo={speed_factor}[a]",
-                "-map", "[v]",
-                "-map", "[a]",
-            ])
+            if has_audio:
+                # Adjust both video and audio speed
+                args.extend([
+                    "-filter_complex",
+                    f"[0:v]{','.join(filters)}[v];[0:a]atempo={speed_factor}[a]",
+                    "-map", "[v]",
+                    "-map", "[a]",
+                ])
+            else:
+                # No audio stream, only process video
+                args.extend([
+                    "-filter_complex",
+                    f"[0:v]{','.join(filters)}[v]",
+                    "-map", "[v]",
+                ])
         elif filters:
             args.extend(["-vf", ",".join(filters)])
 
@@ -462,8 +543,18 @@ class VideoProcessor:
             "-c:v", "libx264",
             "-preset", "fast",
             "-crf", "23",
-            "-c:a", "aac",
-            "-b:a", "128k",
+        ])
+
+        # Only add audio codec if video has audio
+        if has_audio:
+            args.extend([
+                "-c:a", "aac",
+                "-b:a", "128k",
+            ])
+        else:
+            args.append("-an")
+
+        args.extend([
             "-movflags", "+faststart",
             output_path,
         ])

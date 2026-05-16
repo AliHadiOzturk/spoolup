@@ -80,7 +80,11 @@ class MoonrakerClient:
         return False
 
     async def get_timelapse_files(self) -> List[Dict[str, Any]]:
-        """Get list of timelapse files from Moonraker."""
+        """Get list of timelapse files from Moonraker.
+        
+        Returns all timelapse files in a single request.
+        Moonraker's /server/files/list endpoint returns all files at once.
+        """
         logger.debug("Fetching timelapse file list")
         data = await self._request("GET", "/server/files/list?root=timelapse")
         if data is None:
