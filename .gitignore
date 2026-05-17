@@ -33,6 +33,7 @@ config.json
 client_secrets.json
 youtube_token.json
 data/
+logs/
 uploads/
 *.db
 *.sqlite
@@ -67,3 +68,9 @@ Thumbs.db
 
 .playwright-mcp/
 .plans/
+
+# Cloudflare Workers
+worker/node_modules/
+worker/.wrangler/
+worker/dist/
+.cloudflare/
