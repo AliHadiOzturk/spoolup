@@ -62,8 +62,12 @@ const router = createRouter({
 router.beforeEach(async (to, from, next) => {
   const authStore = useAuthStore()
   
-  if (!authStore.initialized) {
+  // Only try to fetch user if we have a token and haven't initialized yet
+  // This prevents 401 errors on public pages like /login
+  if (!authStore.initialized && localStorage.getItem('access_token')) {
     await authStore.fetchUser()
+  } else {
+    authStore.initialized = true
   }
   
   if (to.meta.public && authStore.isAuthenticated) {
