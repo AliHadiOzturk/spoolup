@@ -17,6 +17,7 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import or_, func
@@ -34,6 +35,7 @@ from auth.dependencies import override_get_user
 from config import settings
 from api.moonraker import MoonrakerClient
 from database import get_db, SessionLocal
+from database.crud import get_user_by_username
 from database.models import (
     AudioTrack,
     Printer,
@@ -46,6 +48,20 @@ from database.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _get_user_for_auth(username: str) -> Optional[User]:
+    """Get user by username for auth dependencies (no db parameter)."""
+    db = SessionLocal()
+    try:
+        return db.query(User).filter(User.username == username).first()
+    finally:
+        db.close()
+
+
+# Wire up the auth dependency to use our database
+override_get_user(_get_user_for_auth)
+
 
 # =============================================================================
 # Pydantic Schemas
@@ -239,17 +255,31 @@ if (BASE_DIR / "static").exists():
 # =============================================================================
 
 @app.post("/api/auth/token", response_model=Token)
-async def login(form_data: UserLogin, db: Session = Depends(get_db)):
+async def login(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db)
+):
     """Authenticate user and return JWT token."""
-    user = authenticate_user(db, form_data.username, form_data.password)
-    if not user:
+    user = get_user_by_username(db, form_data.username)
+    if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    access_token = create_access_token(data={"sub": user.username})
+    if not authenticate_user(form_data.username, form_data.password, lambda _: user):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    access_token_expires = timedelta(minutes=30)
+    access_token = create_access_token(
+        data={"sub": user.username},
+        expires_delta=access_token_expires,
+    )
     return {"access_token": access_token, "token_type": "bearer"}
 
 
