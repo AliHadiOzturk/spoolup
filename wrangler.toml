@@ -1,7 +1,0 @@
-name = "spoolup"
-main = "worker/src/index.ts"
-compatibility_date = "2024-01-01"
-
-# Static assets are served from this directory
-[site]
-bucket = "./landing"
