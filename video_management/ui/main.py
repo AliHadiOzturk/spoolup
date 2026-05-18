@@ -222,26 +222,6 @@ async def serve_spa():
     )
 
 
-@app.get("/{path:path}")
-async def serve_spa_routes(path: str):
-    """Serve Vue Router routes by returning index.html for non-API paths."""
-    # Skip API routes
-    if path.startswith("api/") or path.startswith("static/"):
-        raise HTTPException(status_code=404)
-    
-    # Try to serve static files first
-    file_path = VUE_DIST_DIR / path
-    if file_path.exists() and file_path.is_file():
-        return FileResponse(file_path)
-    
-    # Fall back to index.html for client-side routing
-    index_path = VUE_DIST_DIR / "index.html"
-    if index_path.exists():
-        return FileResponse(index_path)
-    
-    raise HTTPException(status_code=404)
-
-
 # Mount static files from Vue dist
 if (VUE_DIST_DIR / "assets").exists():
     app.mount("/assets", StaticFiles(directory=VUE_DIST_DIR / "assets"), name="assets")
@@ -570,6 +550,30 @@ async def get_settings(
             "crop_mode": settings.default_crop_mode
         }
     }
+
+
+# =============================================================================
+# Vue SPA Catch-All Route (MUST be last to avoid conflicts with API routes)
+# =============================================================================
+
+@app.get("/{path:path}")
+async def serve_spa_routes(path: str):
+    """Serve Vue Router routes by returning index.html for non-API paths."""
+    # Skip API routes
+    if path.startswith("api/") or path.startswith("static/"):
+        raise HTTPException(status_code=404)
+    
+    # Try to serve static files first
+    file_path = VUE_DIST_DIR / path
+    if file_path.exists() and file_path.is_file():
+        return FileResponse(file_path)
+    
+    # Fall back to index.html for client-side routing
+    index_path = VUE_DIST_DIR / "index.html"
+    if index_path.exists():
+        return FileResponse(index_path)
+    
+    raise HTTPException(status_code=404)
 
 
 if __name__ == "__main__":
