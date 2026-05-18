@@ -81,8 +81,8 @@
 
 <script setup lang="ts">
 import { Film, Play, Eye } from 'lucide-vue-next'
-import Card from './Card.vue'
-import Badge from './Badge.vue'
+import Card from '../ui/Card.vue'
+import Badge from '../ui/Badge.vue'
 import type { Video } from '@/stores/videos'
 
 interface Props {
