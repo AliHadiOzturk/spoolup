@@ -35,6 +35,7 @@ from config import settings
 from api.moonraker import MoonrakerClient
 from database import get_db, SessionLocal
 from database.models import (
+    AudioTrack,
     Printer,
     ProcessedVideo,
     Upload,
@@ -147,6 +148,16 @@ class UploadCreate(BaseModel):
     tags: Optional[List[str]] = None
 
 
+class TikTokUploadCreate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    tags: Optional[List[str]] = None
+    privacy_status: Optional[str] = "public"
+    allow_comments: Optional[bool] = True
+    allow_duet: Optional[bool] = True
+    allow_stitch: Optional[bool] = True
+
+
 class PrinterCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     moonraker_url: str = Field(..., min_length=1)
@@ -171,8 +182,10 @@ class AnalyticsResponse(BaseModel):
     total_views: int
     total_likes: int
     total_comments: int
+    total_shares: int
     platform_breakdown: Dict[str, Dict[str, int]]
     recent_uploads: List[Dict[str, Any]]
+    platform_status: Dict[str, Dict[str, Any]]
 
 
 class UploadAnalyticsResponse(BaseModel):
@@ -187,14 +200,30 @@ class UploadAnalyticsResponse(BaseModel):
         from_attributes = True
 
 
+class TextOverlayConfig(BaseModel):
+    text: str
+    position_x: Optional[str] = "center"
+    position_y: Optional[str] = "bottom"
+    text_align: Optional[str] = "center"
+    font_size: Optional[int] = 36
+    font_color: Optional[str] = "white"
+    bg_color: Optional[str] = "black"
+    bg_opacity: Optional[float] = 0.5
+    border_width: Optional[int] = 0
+    border_color: Optional[str] = "black"
+
+
 class ProcessRequest(BaseModel):
     start_time: Optional[float] = 0.0
     duration: Optional[float] = 60.0
     output_resolution: Optional[str] = "1080x1920"
-    zoom_level: Optional[float] = 1.0
+    zoom_level: Optional[float] = 0.1
     crop_mode: Optional[str] = "center"
     speed_factor: Optional[float] = None
     add_text: Optional[str] = None
+    text_overlay: Optional[TextOverlayConfig] = None
+    audio_track_id: Optional[int] = None
+    audio_volume: Optional[float] = 0.5
 
 
 # =============================================================================
@@ -234,6 +263,55 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "ui/static")), name="static")
 app.mount("/processed", StaticFiles(directory=os.path.join(BASE_DIR, "uploads/processed")), name="processed")
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "ui/templates"))
+
+
+# =============================================================================
+# PKCE Storage for TikTok OAuth
+# =============================================================================
+
+# Temporary storage for PKCE code_verifier mapped to state parameter
+# Entries expire after 10 minutes
+_pkce_store: Dict[str, Dict[str, Any]] = {}
+
+
+def _generate_pkce() -> tuple[str, str]:
+    """Generate PKCE code_verifier and code_challenge.
+
+    Returns:
+        Tuple of (code_verifier, code_challenge).
+    """
+    import hashlib
+    import base64
+
+    # Generate code_verifier: 43-128 chars random string
+    code_verifier = base64.urlsafe_b64encode(
+        os.urandom(32)
+    ).decode("utf-8").rstrip("=")
+
+    # Generate code_challenge: SHA256 hash of verifier, base64url encoded
+    code_challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(code_verifier.encode("utf-8")).digest()
+    ).decode("utf-8").rstrip("=")
+
+    return code_verifier, code_challenge
+
+
+def _store_pkce_verifier(state: str, verifier: str) -> None:
+    """Store PKCE verifier mapped to state with expiration."""
+    _pkce_store[state] = {
+        "verifier": verifier,
+        "expires_at": datetime.utcnow() + timedelta(minutes=10),
+    }
+
+
+def _get_pkce_verifier(state: str) -> Optional[str]:
+    """Retrieve and remove PKCE verifier for given state."""
+    entry = _pkce_store.pop(state, None)
+    if not entry:
+        return None
+    if datetime.utcnow() > entry["expires_at"]:
+        return None
+    return entry["verifier"]
 
 
 # =============================================================================
@@ -447,6 +525,24 @@ async def video_detail_page(
     return templates.TemplateResponse(
         "video_detail.html",
         {"request": request, "video": video},
+    )
+
+
+@app.get("/audio", response_class=HTMLResponse)
+async def audio_page(request: Request) -> Any:
+    """Render the audio tracks page."""
+    return templates.TemplateResponse(
+        "audio.html",
+        {"request": request},
+    )
+
+
+@app.get("/settings/tiktok", response_class=HTMLResponse)
+async def tiktok_settings_page(request: Request) -> Any:
+    """Render the TikTok settings page."""
+    return templates.TemplateResponse(
+        "tiktok_settings.html",
+        {"request": request},
     )
 
 
@@ -895,8 +991,14 @@ async def process_video(
         }
         if process_request.speed_factor is not None:
             process_options["speed_factor"] = process_request.speed_factor
-        if process_request.add_text is not None:
+        if process_request.text_overlay is not None:
+            process_options["text_overlay"] = process_request.text_overlay.dict()
+        elif process_request.add_text is not None:
+            # Backward compatibility
             process_options["add_text"] = process_request.add_text
+        if process_request.audio_track_id is not None:
+            process_options["audio_track_id"] = process_request.audio_track_id
+            process_options["audio_volume"] = process_request.audio_volume if process_request.audio_volume is not None else 0.5
 
         logger.info(f"Processing options: {process_options}")
 
@@ -925,6 +1027,33 @@ async def process_video(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Video processing failed. The file may be corrupted - try deleting and re-downloading.",
             )
+
+        # Mix audio if specified
+        if process_request.audio_track_id is not None:
+            audio_track = db.query(AudioTrack).filter(
+                AudioTrack.id == process_request.audio_track_id,
+                AudioTrack.user_id == current_user.id,
+            ).first()
+            if audio_track and os.path.exists(audio_track.file_path):
+                logger.info(f"Mixing audio track: {audio_track.name} (id={audio_track.id})")
+                from post_processing.audio_mixer import AudioMixer
+                mixer = AudioMixer(ffmpeg_path=settings.ffmpeg_path)
+                temp_output = str(output_path) + ".audio.mp4"
+                success = mixer.mix_audio(
+                    video_path=str(output_path),
+                    audio_path=audio_track.file_path,
+                    output_path=temp_output,
+                    volume=process_request.audio_volume if process_request.audio_volume is not None else 0.5,
+                )
+                if success:
+                    os.replace(temp_output, str(output_path))
+                    logger.info("Audio mixed successfully")
+                else:
+                    logger.error("Audio mixing failed, keeping original video")
+                    if os.path.exists(temp_output):
+                        os.remove(temp_output)
+            else:
+                logger.warning(f"Audio track not found or file missing: {process_request.audio_track_id}")
 
         # Get info about processed video
         info = processor.get_video_info(str(output_path))
@@ -1025,6 +1154,84 @@ async def delete_processed_video_endpoint(
 
 
 app.include_router(video_router)
+
+
+# =============================================================================
+# Audio Track Routes
+# =============================================================================
+
+audio_router = APIRouter(prefix="/api/audio", tags=["Audio Tracks"])
+
+
+class AudioTrackResponse(BaseModel):
+    id: int
+    name: str
+    file_path: str
+    duration: Optional[float]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AudioTrackCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    file_path: str = Field(..., min_length=1, max_length=512)
+    duration: Optional[float] = None
+
+
+@audio_router.get("/", response_model=List[AudioTrackResponse])
+async def list_audio_tracks(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> Any:
+    """List all audio tracks for the current user."""
+    tracks = db.query(AudioTrack).filter(AudioTrack.user_id == current_user.id).all()
+    return tracks
+
+
+@audio_router.post("/", response_model=AudioTrackResponse, status_code=status.HTTP_201_CREATED)
+async def create_audio_track(
+    track_data: AudioTrackCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> Any:
+    """Create a new audio track record."""
+    track = AudioTrack(
+        name=track_data.name,
+        file_path=track_data.file_path,
+        duration=track_data.duration,
+        user_id=current_user.id,
+    )
+    db.add(track)
+    db.commit()
+    db.refresh(track)
+    logger.info(f"Created audio track: {track.name} (id={track.id})")
+    return track
+
+
+@audio_router.delete("/{track_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_audio_track(
+    track_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> None:
+    """Delete an audio track."""
+    track = db.query(AudioTrack).filter(
+        AudioTrack.id == track_id,
+        AudioTrack.user_id == current_user.id,
+    ).first()
+    if track is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Audio track not found",
+        )
+    db.delete(track)
+    db.commit()
+    logger.info(f"Deleted audio track: {track_id}")
+
+
+app.include_router(audio_router)
 
 
 # =============================================================================
@@ -1225,11 +1432,15 @@ async def upload_to_youtube(
 @upload_router.post("/tiktok/{processed_id}", response_model=UploadResponse)
 async def upload_to_tiktok(
     processed_id: int,
-    upload_data: UploadCreate,
+    upload_data: TikTokUploadCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ) -> Any:
-    """Upload a processed video to TikTok."""
+    """Queue a processed video for TikTok upload.
+
+    The upload is queued for the background worker to process.
+    Use GET /api/uploads/{upload_id}/status to check progress.
+    """
     processed = db.query(ProcessedVideo).filter(ProcessedVideo.id == processed_id).first()
     if processed is None:
         raise HTTPException(
@@ -1243,57 +1454,64 @@ async def upload_to_tiktok(
             detail="Video processing not completed",
         )
 
-    # Create upload record
+    # Check TikTok is enabled
+    if not settings.enable_tiktok_upload:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="TikTok upload is disabled. Enable it in settings.",
+        )
+
+    # Check credentials are configured
+    if not settings.tiktok_client_key or not settings.tiktok_client_secret:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="TikTok credentials not configured. Set TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET.",
+        )
+
+    # Check token exists
+    token_path = settings.tiktok_token_file
+    if not os.path.exists(token_path):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="TikTok not authenticated. Visit /api/tiktok/auth to connect your account.",
+        )
+
+    # Build tags with TikTok-specific options
+    tags = {"tags": upload_data.tags} if upload_data.tags else {}
+
+    # For unaudited TikTok apps, privacy MUST be private
+    # See: https://developers.tiktok.com/doc/content-sharing-guidelines/
+    privacy_status = upload_data.privacy_status or settings.tiktok_default_privacy
+    if privacy_status != "private":
+        logger.warning(
+            f"TikTok upload requested with privacy='{privacy_status}' but "
+            f"unaudited apps require 'private'. Forcing privacy to 'private'."
+        )
+        privacy_status = "private"
+
+    tags["privacy_status"] = privacy_status
+    tags["allow_comments"] = upload_data.allow_comments
+    tags["allow_duet"] = upload_data.allow_duet
+    tags["allow_stitch"] = upload_data.allow_stitch
+
+    # Create upload record - queued for worker
     upload = Upload(
         processed_video_id=processed_id,
         platform="tiktok",
-        status="pending",
-        title=upload_data.title or processed.video.filename,
+        status="queued",
+        title=upload_data.title or processed.video.title or processed.video.filename,
         description=upload_data.description,
-        tags={"tags": upload_data.tags} if upload_data.tags else None,
+        tags=tags,
     )
 
     db.add(upload)
     db.commit()
     db.refresh(upload)
 
-    # Start TikTok upload
-    logger.info(f"[TikTok Upload] Starting upload for processed_video_id={processed_id}, upload_id={upload.id}")
-    logger.info(f"[TikTok Upload] Video file: {processed.processed_path}")
-    logger.info(f"[TikTok Upload] Title: {upload.title}")
-    
-    # Update status to uploading
-    upload.status = "uploading"
-    db.commit()
-    logger.info(f"[TikTok Upload] Status updated to 'uploading' for upload_id={upload.id}")
-
-    try:
-        # TODO: Implement actual TikTok upload
-        # TikTok upload requires a different flow (initiate upload, get URL, upload chunks)
-        # For now, mark as failed with instructions
-        error_msg = "TikTok upload not yet implemented. YouTube upload is available."
-        logger.warning(f"[TikTok Upload] {error_msg}")
-        upload.status = "failed"
-        upload.error_message = error_msg
-        db.commit()
-        
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=error_msg,
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        error_msg = f"TikTok upload failed: {str(e)}"
-        logger.exception(f"[TikTok Upload] {error_msg}")
-        upload.status = "failed"
-        upload.error_message = error_msg
-        db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=error_msg,
-        )
+    logger.info(
+        f"[TikTok Upload] Queued upload for processed_video_id={processed_id}, "
+        f"upload_id={upload.id}, privacy={tags['privacy_status']}"
+    )
 
     return upload
 
@@ -1379,6 +1597,198 @@ app.include_router(upload_router)
 
 
 # =============================================================================
+# TikTok Auth Routes
+# =============================================================================
+
+tiktok_router = APIRouter(prefix="/api/tiktok", tags=["TikTok"])
+
+
+class TikTokAuthUrlResponse(BaseModel):
+    auth_url: str
+    message: str
+
+
+class TikTokTokenResponse(BaseModel):
+    success: bool
+    message: str
+    expires_in: Optional[int] = None
+
+
+class TikTokAccountResponse(BaseModel):
+    connected: bool
+    username: Optional[str] = None
+    follower_count: Optional[int] = None
+    avatar_url: Optional[str] = None
+
+
+@tiktok_router.get("/auth", response_model=TikTokAuthUrlResponse)
+async def get_tiktok_auth_url(
+    current_user: User = Depends(get_current_active_user),
+) -> Any:
+    """Get TikTok OAuth2 authorization URL."""
+    if not settings.tiktok_client_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="TikTok client key not configured",
+        )
+
+    # Build OAuth URL using TikTok Login Kit endpoint
+    # Note: Login Kit uses www.tiktok.com, not open.tiktokapis.com
+    from urllib.parse import quote
+    from uploaders.tiktok import OAUTH_AUTHORIZE_URL
+
+    scopes = "video.publish,user.info.basic"
+    # Generate a random state parameter for CSRF protection
+    import secrets
+    state = secrets.token_urlsafe(32)
+
+    # Generate PKCE parameters (TikTok requires this for new apps)
+    code_verifier, code_challenge = _generate_pkce()
+    _store_pkce_verifier(state, code_verifier)
+
+    # URL-encode all parameters as required by TikTok docs
+    params = {
+        "client_key": settings.tiktok_client_key,
+        "redirect_uri": settings.tiktok_redirect_uri,
+        "scope": scopes,
+        "response_type": "code",
+        "state": state,
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
+    }
+    query_string = "\u0026".join(f"{quote(k, safe='')}={quote(v, safe='')}" for k, v in params.items())
+
+    auth_url = f"{OAUTH_AUTHORIZE_URL}?{query_string}"
+
+    logger.info(f"Generated TikTok auth URL for user {current_user.username} (with PKCE)")
+
+    return {
+        "auth_url": auth_url,
+        "state": state,
+        "message": "Visit this URL to authorize TikTok access, then call /api/tiktok/auth/callback with the code",
+    }
+
+
+@tiktok_router.get("/auth/callback")
+async def tiktok_auth_callback(
+    code: str,
+    state: Optional[str] = None,
+) -> Any:
+    """Handle TikTok OAuth2 callback.
+
+    Note: This endpoint must NOT require authentication because TikTok's
+    browser redirect does not include our JWT token.
+    """
+    if not settings.tiktok_client_key or not settings.tiktok_client_secret:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="TikTok credentials not configured",
+        )
+
+    # Retrieve PKCE code_verifier using state parameter
+    code_verifier = None
+    if state:
+        code_verifier = _get_pkce_verifier(state)
+        if not code_verifier:
+            logger.warning(f"PKCE verifier not found or expired for state={state}")
+    else:
+        logger.warning("No state parameter in callback - PKCE verifier unavailable")
+
+    from uploaders.tiktok import TikTokUploader
+
+    uploader = TikTokUploader(
+        client_key=settings.tiktok_client_key,
+        client_secret=settings.tiktok_client_secret,
+    )
+    uploader.token_path = settings.tiktok_token_file
+
+    logger.info("Exchanging TikTok auth code from callback")
+    success = uploader.authenticate(
+        auth_code=code,
+        redirect_uri=settings.tiktok_redirect_uri,
+        code_verifier=code_verifier,
+    )
+
+    if success:
+        logger.info("TikTok authentication successful")
+        return {
+            "success": True,
+            "message": "TikTok account connected successfully. You can close this window.",
+        }
+    else:
+        logger.error("TikTok authentication failed")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to authenticate with TikTok. Invalid code or credentials.",
+        )
+
+
+@tiktok_router.post("/auth/refresh", response_model=TikTokTokenResponse)
+async def refresh_tiktok_token(
+    current_user: User = Depends(get_current_active_user),
+) -> Any:
+    """Manually refresh TikTok access token."""
+    from uploaders.tiktok import TikTokUploader
+
+    uploader = TikTokUploader(
+        client_key=settings.tiktok_client_key,
+        client_secret=settings.tiktok_client_secret,
+    )
+    uploader.token_path = settings.tiktok_token_file
+
+    if not uploader.is_authenticated():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Not authenticated with TikTok",
+        )
+
+    logger.info(f"Refreshing TikTok token for user {current_user.username}")
+    success = uploader.refresh_token()
+
+    if success:
+        # Calculate approximate expiry
+        expires_in = int(uploader._token_expires_at - time.time()) if uploader._token_expires_at else None
+        return {
+            "success": True,
+            "message": "Token refreshed successfully",
+            "expires_in": expires_in,
+        }
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to refresh token. Please re-authenticate.",
+        )
+
+
+@tiktok_router.get("/account", response_model=TikTokAccountResponse)
+async def get_tiktok_account(
+    current_user: User = Depends(get_current_active_user),
+) -> Any:
+    """Get connected TikTok account info.
+
+    Note: This endpoint only checks if we have a valid token locally.
+    It does not call TikTok's API to avoid permission/scope issues.
+    """
+    from uploaders.tiktok import TikTokUploader
+
+    uploader = TikTokUploader(
+        client_key=settings.tiktok_client_key,
+        client_secret=settings.tiktok_client_secret,
+    )
+    uploader.token_path = settings.tiktok_token_file
+
+    if not uploader.is_authenticated():
+        logger.info("TikTok not authenticated - no valid token found")
+        return {"connected": False}
+
+    logger.info("TikTok authenticated - token is valid")
+    return {"connected": True}
+
+
+app.include_router(tiktok_router)
+
+
+# =============================================================================
 # Zip Archive Routes
 # =============================================================================
 
@@ -1446,33 +1856,47 @@ async def get_analytics_dashboard(
     current_user: User = Depends(get_current_active_user),
 ) -> Any:
     """Get analytics dashboard data."""
-    # Aggregate statistics
-    total_uploads = db.query(Upload).count()
-    total_views = db.query(VideoAnalytics).with_entities(
-        VideoAnalytics.views
-    ).count()
-    total_likes = db.query(VideoAnalytics).with_entities(
-        VideoAnalytics.likes
-    ).count()
-    total_comments = db.query(VideoAnalytics).with_entities(
-        VideoAnalytics.comments
-    ).count()
+    from sqlalchemy import func
 
-    # Platform breakdown
+    # Aggregate statistics from VideoAnalytics
+    analytics_agg = db.query(
+        func.coalesce(func.sum(VideoAnalytics.views), 0).label("total_views"),
+        func.coalesce(func.sum(VideoAnalytics.likes), 0).label("total_likes"),
+        func.coalesce(func.sum(VideoAnalytics.comments), 0).label("total_comments"),
+        func.coalesce(func.sum(VideoAnalytics.shares), 0).label("total_shares"),
+    ).first()
+
+    total_uploads = db.query(Upload).count()
+    total_views = analytics_agg.total_views or 0
+    total_likes = analytics_agg.total_likes or 0
+    total_comments = analytics_agg.total_comments or 0
+    total_shares = analytics_agg.total_shares or 0
+
+    # Platform breakdown with actual analytics
     platform_stats = {}
     for platform in ["youtube", "tiktok"]:
         uploads = db.query(Upload).filter(Upload.platform == platform).count()
+
+        # Aggregate analytics for this platform
+        platform_analytics = db.query(
+            func.coalesce(func.sum(VideoAnalytics.views), 0).label("views"),
+            func.coalesce(func.sum(VideoAnalytics.likes), 0).label("likes"),
+            func.coalesce(func.sum(VideoAnalytics.comments), 0).label("comments"),
+            func.coalesce(func.sum(VideoAnalytics.shares), 0).label("shares"),
+        ).join(Upload).filter(Upload.platform == platform).first()
+
         platform_stats[platform] = {
             "uploads": uploads,
-            "views": 0,  # TODO: Aggregate views per platform
-            "likes": 0,
-            "comments": 0,
+            "views": platform_analytics.views or 0,
+            "likes": platform_analytics.likes or 0,
+            "comments": platform_analytics.comments or 0,
+            "shares": platform_analytics.shares or 0,
         }
 
     # Recent uploads
     recent = (
         db.query(Upload)
-        .order_by(Upload.uploaded_at.desc())
+        .order_by(Upload.updated_at.desc())
         .limit(10)
         .all()
     )
@@ -1487,13 +1911,47 @@ async def get_analytics_dashboard(
         for u in recent
     ]
 
+    # Platform connection status
+    platform_status = {}
+
+    # Check YouTube (check if token exists)
+    youtube_token_path = getattr(settings, 'youtube_token_file', 'data/youtube_token.json')
+    platform_status["youtube"] = {
+        "connected": os.path.exists(youtube_token_path),
+    }
+
+    # Check TikTok
+    from uploaders.tiktok import TikTokUploader
+    tiktok_uploader = TikTokUploader(
+        client_key=settings.tiktok_client_key,
+        client_secret=settings.tiktok_client_secret,
+    )
+    tiktok_uploader.token_path = settings.tiktok_token_file
+    tiktok_connected = tiktok_uploader.is_authenticated()
+
+    platform_status["tiktok"] = {
+        "connected": tiktok_connected,
+    }
+
+    # Try to get TikTok creator info if connected
+    if tiktok_connected:
+        try:
+            creator_info = tiktok_uploader.get_creator_info()
+            if creator_info:
+                platform_status["tiktok"]["username"] = creator_info.get("username")
+                platform_status["tiktok"]["follower_count"] = creator_info.get("follower_count", 0)
+        except Exception as e:
+            logger.warning(f"Failed to get TikTok creator info: {e}")
+
     return {
         "total_uploads": total_uploads,
         "total_views": total_views,
         "total_likes": total_likes,
         "total_comments": total_comments,
+        "total_shares": total_shares,
         "platform_breakdown": platform_stats,
         "recent_uploads": recent_uploads,
+        "platform_status": platform_status,
     }
 
 
@@ -1519,6 +1977,75 @@ async def get_upload_analytics(
     )
 
     return analytics
+
+
+@analytics_router.post("/collect/tiktok")
+async def collect_tiktok_analytics(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+) -> Any:
+    """Collect analytics for all completed TikTok uploads.
+
+    This endpoint can be called manually or by a scheduled job.
+    """
+    from uploaders.tiktok import TikTokUploader
+
+    uploader = TikTokUploader(
+        client_key=settings.tiktok_client_key,
+        client_secret=settings.tiktok_client_secret,
+    )
+    uploader.token_path = settings.tiktok_token_file
+
+    if not uploader.is_authenticated():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="TikTok not authenticated",
+        )
+
+    # Find all completed TikTok uploads with platform_video_id
+    uploads = db.query(Upload).filter(
+        Upload.platform == "tiktok",
+        Upload.status == "completed",
+        Upload.platform_video_id.isnot(None),
+    ).all()
+
+    collected = 0
+    failed = 0
+
+    for upload in uploads:
+        try:
+            analytics_data = uploader.get_video_analytics(upload.platform_video_id)
+            if not analytics_data:
+                failed += 1
+                continue
+
+            # Create or update analytics record
+            video_analytics = VideoAnalytics(
+                upload_id=upload.id,
+                views=analytics_data.get("view_count", 0),
+                likes=analytics_data.get("like_count", 0),
+                comments=analytics_data.get("comment_count", 0),
+                shares=analytics_data.get("share_count", 0),
+            )
+            db.add(video_analytics)
+            collected += 1
+
+            logger.info(
+                f"Collected TikTok analytics for upload {upload.id}: "
+                f"{video_analytics.views} views, {video_analytics.likes} likes"
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to collect analytics for upload {upload.id}: {e}")
+            failed += 1
+
+    db.commit()
+
+    return {
+        "collected": collected,
+        "failed": failed,
+        "total": len(uploads),
+    }
 
 
 app.include_router(analytics_router)

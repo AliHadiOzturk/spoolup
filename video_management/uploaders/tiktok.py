@@ -34,7 +34,7 @@ class TikTokAPIError(Exception):
         return super().__str__()
 
 TIKTOK_API_BASE = "https://open.tiktokapis.com/v2"
-OAUTH_CONNECT_URL = "https://open.tiktokapis.com/v2/platform/oauth/connect/"
+OAUTH_AUTHORIZE_URL = "https://www.tiktok.com/v2/auth/authorize/"
 TOKEN_ENDPOINT = "https://open.tiktokapis.com/v2/oauth/token/"
 VIDEO_INIT_ENDPOINT = f"{TIKTOK_API_BASE}/post/publish/video/init/"
 VIDEO_CREATE_ENDPOINT = f"{TIKTOK_API_BASE}/post/publish/video/create/"
@@ -160,7 +160,7 @@ class TikTokUploader:
 
         return False
 
-    def authenticate(self, auth_code: Optional[str] = None) -> bool:
+    def authenticate(self, auth_code: Optional[str] = None, redirect_uri: Optional[str] = None, code_verifier: Optional[str] = None) -> bool:
         """Authenticate with TikTok using OAuth2 flow.
 
         If auth_code is provided, exchanges it for access and refresh tokens.
@@ -168,6 +168,8 @@ class TikTokUploader:
 
         Args:
             auth_code: OAuth2 authorization code from TikTok redirect.
+            redirect_uri: The redirect_uri used in the authorization request.
+            code_verifier: PKCE code_verifier (required for new TikTok apps).
 
         Returns:
             True if authentication successful, False otherwise.
@@ -184,20 +186,26 @@ class TikTokUploader:
             logger.info("No auth_code provided and no valid token found")
             logger.info(
                 f"Visit this URL to authorize: "
-                f"{OAUTH_CONNECT_URL}?client_key={self.client_key}&redirect_uri=REDIRECT_URI&scope=video.publish"
+                f"{OAUTH_AUTHORIZE_URL}?client_key={self.client_key}&redirect_uri=REDIRECT_URI&scope=video.publish"
             )
             return False
 
         logger.info("Exchanging auth_code for access token")
         try:
+            payload = {
+                "client_key": self.client_key,
+                "client_secret": self.client_secret,
+                "code": auth_code,
+                "grant_type": "authorization_code",
+            }
+            if redirect_uri:
+                payload["redirect_uri"] = redirect_uri
+            if code_verifier:
+                payload["code_verifier"] = code_verifier
+
             response = requests.post(
                 TOKEN_ENDPOINT,
-                data={
-                    "client_key": self.client_key,
-                    "client_secret": self.client_secret,
-                    "code": auth_code,
-                    "grant_type": "authorization_code",
-                },
+                data=payload,
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
                 timeout=30,
             )
@@ -207,10 +215,11 @@ class TikTokUploader:
             logger.error(f"Token request failed: {e}")
             return False
 
-        error_code = data.get("error_code")
-        if error_code:
-            error_msg = data.get("description", "Unknown error")
-            logger.error(f"Token API error {error_code}: {error_msg}")
+        # New API uses "error" and "error_description" fields
+        error = data.get("error")
+        if error:
+            error_msg = data.get("error_description", "Unknown error")
+            logger.error(f"Token API error {error}: {error_msg}")
             return False
 
         self._access_token = data.get("access_token")
@@ -259,10 +268,11 @@ class TikTokUploader:
             logger.error(f"Token refresh failed: {e}")
             return False
 
-        error_code = data.get("error_code")
-        if error_code:
-            error_msg = data.get("description", "Unknown error")
-            logger.error(f"Token refresh API error {error_code}: {error_msg}")
+        # New API uses "error" and "error_description" fields
+        error = data.get("error")
+        if error:
+            error_msg = data.get("error_description", "Unknown error")
+            logger.error(f"Token refresh API error {error}: {error_msg}")
             return False
 
         self._access_token = data.get("access_token")
@@ -339,7 +349,10 @@ class TikTokUploader:
             "disable_stitch": not allow_stitch,
         }
 
-        logger.info(f"Initializing upload: {title} ({file_size} bytes, {total_chunk_count} chunks)")
+        logger.info(
+            f"Initializing upload: {title} ({file_size} bytes, {total_chunk_count} chunks, "
+            f"privacy={privacy_status})"
+        )
         try:
             response = requests.post(
                 VIDEO_INIT_ENDPOINT,
@@ -349,6 +362,26 @@ class TikTokUploader:
             )
             response.raise_for_status()
             data = response.json()
+        except requests.HTTPError as e:
+            # Log the actual response body for debugging
+            try:
+                error_body = e.response.json()
+                logger.error(f"Upload init HTTP {e.response.status_code}: {error_body}")
+                # Check for specific error codes even in HTTP errors
+                error_code = error_body.get("error", {}).get("code")
+                if error_code == "unaudited_client_can_only_post_to_private_accounts":
+                    raise TikTokAPIError(
+                        "Your TikTok app is unaudited and can only upload to private accounts. "
+                        "Please set privacy_status='private' or submit your app for review at "
+                        "https://developers.tiktok.com/apps",
+                        code=403,
+                        response_data=error_body.get("error"),
+                    )
+            except TikTokAPIError:
+                raise
+            except Exception:
+                logger.error(f"Upload init HTTP {e.response.status_code}: {e.response.text}")
+            return None
         except requests.RequestException as e:
             logger.error(f"Upload init failed: {e}")
             return None
@@ -357,6 +390,14 @@ class TikTokUploader:
         if error_code:
             error_msg = data.get("error", {}).get("message", "Unknown error")
             logger.error(f"Upload init API error {error_code}: {error_msg}")
+            if error_code == "unaudited_client_can_only_post_to_private_accounts":
+                raise TikTokAPIError(
+                    "Your TikTok app is unaudited and can only upload to private accounts. "
+                    "Please set privacy_status='private' or submit your app for review at "
+                    "https://developers.tiktok.com/apps",
+                    code=403,
+                    response_data=data.get("error"),
+                )
             return None
 
         return data.get("data", {})

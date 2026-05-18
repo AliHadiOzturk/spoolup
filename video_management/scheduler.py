@@ -80,6 +80,16 @@ class TaskScheduler:
                 uploader = YouTubeUploader()
                 uploader.authenticate(settings.youtube_client_secrets, settings.youtube_token_file)
                 logger.info("YouTube tokens refreshed")
+            
+            # Refresh TikTok tokens
+            if settings.tiktok_client_key and settings.tiktok_client_secret and os.path.exists(settings.tiktok_token_file):
+                tiktok = TikTokUploader(
+                    settings.tiktok_client_key,
+                    settings.tiktok_client_secret,
+                )
+                tiktok.token_path = settings.tiktok_token_file
+                if tiktok.is_authenticated() and tiktok.refresh_token():
+                    logger.info("TikTok tokens refreshed")
         except Exception as e:
             logger.error(f"Token refresh failed: {e}")
     

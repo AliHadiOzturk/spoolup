@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     # TikTok
     tiktok_client_key: Optional[str] = None
     tiktok_client_secret: Optional[str] = None
+    tiktok_token_file: str = f"{BASE_DIR}/data/tiktok_token.json"
+    tiktok_redirect_uri: str = "http://localhost:8000/api/tiktok/auth/callback"
+    tiktok_default_privacy: str = "private"  # Must be private for unaudited apps
+    tiktok_poll_interval: int = 30  # seconds
+    tiktok_max_poll_time: int = 600  # 10 minutes
     
     # Video Processing
     ffmpeg_path: str = "ffmpeg"
@@ -48,7 +53,7 @@ class Settings(BaseSettings):
     max_login_attempts: int = 5  # Failed attempts before temporary lock
     
     # Feature Flags
-    enable_tiktok_upload: bool = False
+    enable_tiktok_upload: bool = True
     enable_post_processing: bool = True
     enable_bulk_operations: bool = False
     
@@ -58,7 +63,7 @@ class Settings(BaseSettings):
     upload_chunk_size: int = 5 * 1024 * 1024  # 5MB
     
     # Processing Defaults
-    default_zoom_level: float = 1.0
+    default_zoom_level: float = 0.1
     default_target_duration: int = 60
     default_crop_mode: str = "center"
     

@@ -50,10 +50,16 @@ class DashboardManager {
     }
 
     renderStats(data) {
-        document.getElementById('stat-total-videos').textContent = (data.total_videos || 0).toLocaleString();
-        document.getElementById('stat-pending-uploads').textContent = (data.pending_uploads || 0).toLocaleString();
-        document.getElementById('stat-published').textContent = (data.published_videos || 0).toLocaleString();
-        document.getElementById('stat-total-views').textContent = (data.total_views || 0).toLocaleString();
+        // Update stats if elements exist (some may be added for TikTok)
+        const totalVideos = document.getElementById('stat-total-videos');
+        const pendingUploads = document.getElementById('stat-pending-uploads');
+        const published = document.getElementById('stat-published');
+        const totalViews = document.getElementById('stat-total-views');
+        
+        if (totalVideos) totalVideos.textContent = (data.total_videos || 0).toLocaleString();
+        if (pendingUploads) pendingUploads.textContent = (data.pending_uploads || 0).toLocaleString();
+        if (published) published.textContent = (data.published_videos || 0).toLocaleString();
+        if (totalViews) totalViews.textContent = (data.total_views || 0).toLocaleString();
     }
 
     renderRecentActivity(uploads) {
@@ -108,7 +114,15 @@ class DashboardManager {
             const connected = data.connected;
             const statusText = connected ? 'Connected' : 'Disconnected';
             const statusColor = connected ? 'var(--success-color)' : 'var(--error-color)';
-            const statusBg = connected ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)';
+
+            let extraInfo = '';
+            if (p.key === 'tiktok' && connected && data.username) {
+                extraInfo = `
+                    <div style="font-size: 0.8125rem; color: var(--text-secondary); margin-top: 0.25rem;">
+                        @${data.username} ${data.follower_count ? `• ${data.follower_count.toLocaleString()} followers` : ''}
+                    </div>
+                `;
+            }
 
             return `
                 <div style="display: flex; align-items: center; gap: 0.75rem; padding: 1rem; background: var(--background); border-radius: 8px; margin-bottom: 0.5rem;">
@@ -119,6 +133,7 @@ class DashboardManager {
                             <span style="width: 8px; height: 8px; border-radius: 50%; background: ${statusColor}; display: inline-block;"></span>
                             <span style="font-size: 0.8125rem; color: var(--text-secondary);">${statusText}</span>
                         </div>
+                        ${extraInfo}
                         ${data.quota_used !== undefined ? `
                             <div style="margin-top: 0.5rem;">
                                 <div style="display: flex; justify-content: space-between; margin-bottom: 0.125rem;">

@@ -6,10 +6,197 @@ import logging
 import os
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+# Optional PIL import for text overlay fallback
+PIL_AVAILABLE = False
+try:
+    from PIL import Image, ImageDraw, ImageFont
+    PIL_AVAILABLE = True
+except ImportError:
+    logger.warning("Pillow not installed. Text overlay fallback will not be available.")
+
+
+class TextOverlayFallback:
+    """Fallback text overlay using PIL when FFmpeg drawtext is unavailable."""
+
+    @staticmethod
+    def color_to_rgb(color_str: str) -> Tuple[int, int, int]:
+        """Convert color string to RGB tuple."""
+        color_map = {
+            "white": (255, 255, 255),
+            "black": (0, 0, 0),
+            "red": (255, 0, 0),
+            "green": (0, 255, 0),
+            "blue": (0, 0, 255),
+            "yellow": (255, 255, 0),
+            "cyan": (0, 255, 255),
+            "magenta": (255, 0, 255),
+            "orange": (255, 165, 0),
+            "purple": (128, 0, 128),
+            "gray": (128, 128, 128),
+            "grey": (128, 128, 128),
+            "pink": (255, 192, 203),
+            "brown": (165, 42, 42),
+        }
+
+        color_lower = color_str.lower().strip()
+        if color_lower in color_map:
+            return color_map[color_lower]
+
+        # Try hex color
+        if color_str.startswith("#"):
+            hex_val = color_str[1:]
+            if len(hex_val) == 3:
+                hex_val = "".join([c * 2 for c in hex_val])
+            if len(hex_val) == 6:
+                return tuple(int(hex_val[i : i + 2], 16) for i in (0, 2, 4))
+
+        # Default to white
+        return (255, 255, 255)
+
+    @staticmethod
+    def create_text_overlay_image(
+        text: str,
+        width: int,
+        height: int,
+        font_size: int = 36,
+        font_color: str = "white",
+        bg_color: str = "black",
+        bg_opacity: float = 0.5,
+        border_width: int = 0,
+        border_color: str = "black",
+        position_x: str = "center",
+        position_y: str = "bottom",
+    ) -> Optional[str]:
+        """Create a transparent PNG with text overlay.
+
+        Args:
+            text: Text to render
+            width: Video width
+            height: Video height
+            font_size: Font size in pixels
+            font_color: Font color (name or hex)
+            bg_color: Background color (name or hex)
+            bg_opacity: Background opacity (0.0 to 1.0)
+            border_width: Border width in pixels
+            border_color: Border color
+            position_x: Horizontal position (left, center, right)
+            position_y: Vertical position (top, center, bottom)
+
+        Returns:
+            Path to temporary PNG file, or None on failure
+        """
+        if not PIL_AVAILABLE:
+            logger.error("Pillow not available for text overlay fallback")
+            return None
+
+        try:
+            # Create transparent image
+            img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(img)
+
+            # Try to load a font, fallback to default
+            try:
+                # Try system fonts
+                font_paths = [
+                    "/System/Library/Fonts/Helvetica.ttc",  # macOS
+                    "/System/Library/Fonts/HelveticaNeue.ttc",  # macOS
+                    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",  # Linux
+                    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",  # Linux
+                    "/usr/share/fonts/truetype/freefont/FreeSans.ttf",  # Linux
+                    "C:/Windows/Fonts/arial.ttf",  # Windows
+                ]
+                font = None
+                for fp in font_paths:
+                    if os.path.exists(fp):
+                        font = ImageFont.truetype(fp, font_size)
+                        break
+                if font is None:
+                    font = ImageFont.load_default()
+            except Exception:
+                font = ImageFont.load_default()
+
+            # Calculate text size
+            bbox = draw.textbbox((0, 0), text, font=font)
+            text_width = bbox[2] - bbox[0]
+            text_height = bbox[3] - bbox[1]
+
+            # Calculate position
+            padding = 20
+            
+            # Handle position_x
+            try:
+                x = int(float(position_x))
+            except (ValueError, TypeError):
+                if position_x == "left":
+                    x = padding
+                elif position_x == "right":
+                    x = width - text_width - padding
+                else:  # center
+                    x = (width - text_width) // 2
+            
+            # Handle position_y
+            try:
+                y = int(float(position_y))
+            except (ValueError, TypeError):
+                if position_y == "top":
+                    y = padding
+                elif position_y == "center":
+                    y = (height - text_height) // 2
+                else:  # bottom
+                    y = height - text_height - padding
+
+            # Ensure text stays within bounds
+            x = max(padding, min(x, width - text_width - padding))
+            y = max(padding, min(y, height - text_height - padding))
+
+            # Draw background box if opacity > 0
+            if bg_opacity > 0:
+                bg_rgb = TextOverlayFallback.color_to_rgb(bg_color)
+                bg_rgba = (*bg_rgb, int(255 * bg_opacity))
+                box_padding = 8
+                draw.rectangle(
+                    [
+                        x - box_padding,
+                        y - box_padding,
+                        x + text_width + box_padding,
+                        y + text_height + box_padding,
+                    ],
+                    fill=bg_rgba,
+                )
+
+            # Draw border if width > 0
+            if border_width > 0:
+                border_rgb = TextOverlayFallback.color_to_rgb(border_color)
+                for offset in range(border_width):
+                    for dx, dy in [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]:
+                        draw.text(
+                            (x + dx * (offset + 1), y + dy * (offset + 1)),
+                            text,
+                            font=font,
+                            fill=(*border_rgb, 255),
+                        )
+
+            # Draw text
+            text_rgb = TextOverlayFallback.color_to_rgb(font_color)
+            draw.text((x, y), text, font=font, fill=(*text_rgb, 255))
+
+            # Save to temp file
+            temp_file = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+            img.save(temp_file.name)
+            temp_file.close()
+
+            logger.info(f"Created text overlay image: {temp_file.name} ({width}x{height})")
+            return temp_file.name
+
+        except Exception as e:
+            logger.exception(f"Failed to create text overlay image: {e}")
+            return None
 
 
 class VideoProcessor:
@@ -55,6 +242,21 @@ class VideoProcessor:
                 "Please install FFmpeg or provide the correct path."
             )
 
+    def _has_drawtext_filter(self) -> bool:
+        """Check if FFmpeg has the drawtext filter available."""
+        try:
+            result = subprocess.run(
+                [self.ffmpeg_path, "-filters"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            return "drawtext" in result.stdout
+        except Exception as e:
+            logger.warning(f"Could not check for drawtext filter: {e}")
+            return False
+
     def _run_ffmpeg(self, args: List[str]) -> Tuple[bool, str]:
         """Run ffmpeg with given arguments."""
         cmd = [self.ffmpeg_path, "-y"] + args
@@ -79,6 +281,112 @@ class VideoProcessor:
         except Exception as e:
             logger.exception(f"FFmpeg execution failed: {e}")
             return False, str(e)
+
+    def _parse_position(self, value: str, axis: str, dimension: int) -> str:
+        """Parse position value into FFmpeg drawtext expression.
+
+        Supports:
+        - Keywords: left, center, right (x) / top, center, bottom (y)
+        - Numbers: treated as pixels (e.g., "100")
+        - Percentages: converted to expression (e.g., "10%" -> "w*0.1")
+        - Expressions: passed through as-is (e.g., "(w-text_w)/2")
+
+        Args:
+            value: Position value string
+            axis: "x" or "y"
+            dimension: Video dimension in pixels (width or height)
+
+        Returns:
+            FFmpeg expression string
+        """
+        value = str(value).strip().lower()
+
+        # Handle keywords
+        if axis == "x":
+            if value == "left":
+                return "20"
+            if value == "center":
+                return "(w-text_w)/2"
+            if value == "right":
+                return "w-text_w-20"
+        else:  # axis == "y"
+            if value == "top":
+                return "30"
+            if value == "center":
+                return "(h-text_h)/2"
+            if value == "bottom":
+                return "h-text_h-30"
+
+        # Check if it's an expression (contains w, h, or operators)
+        if any(c in value for c in ["w", "h", "(", "+", "-", "*", "/"]):
+            return value
+
+        # Check if it's a percentage
+        if value.endswith("%"):
+            try:
+                pct = float(value[:-1]) / 100.0
+                if axis == "x":
+                    return f"w*{pct}"
+                return f"h*{pct}"
+            except ValueError:
+                pass
+
+        # Treat as raw pixel value
+        try:
+            float(value)
+            return value
+        except ValueError:
+            pass
+
+        # Fallback
+        logger.warning(f"Unrecognized position value '{value}' for {axis}, using center")
+        if axis == "x":
+            return "(w-text_w)/2"
+        return "(h-text_h)/2"
+
+    def _evaluate_position_for_pil(self, value: str, axis: str, dimension: int) -> str:
+        """Evaluate position value for PIL fallback.
+
+        Returns a keyword or pixel value that PIL can understand.
+        For expressions/percentages, approximates to center.
+
+        Args:
+            value: Position value string
+            axis: "x" or "y"
+            dimension: Video dimension in pixels
+
+        Returns:
+            Keyword (left, center, right, top, bottom) or pixel string
+        """
+        value = str(value).strip().lower()
+
+        # Keywords pass through
+        if value in ["left", "center", "right", "top", "bottom"]:
+            return value
+
+        # Check if it's a percentage
+        if value.endswith("%"):
+            try:
+                pct = float(value[:-1]) / 100.0
+                pixel = int(dimension * pct)
+                return str(pixel)
+            except ValueError:
+                pass
+
+        # Check if it's an expression - PIL can't handle these, fallback to center
+        if any(c in value for c in ["w", "h", "(", "+", "-", "*", "/"]):
+            logger.warning(f"FFmpeg expression '{value}' not supported in PIL fallback, using center")
+            return "center"
+
+        # Try to parse as number
+        try:
+            float(value)
+            return value
+        except ValueError:
+            pass
+
+        # Fallback
+        return "center"
 
     def get_video_info(self, input_path: str) -> Optional[Dict[str, Any]]:
         """Get video metadata using ffprobe.
@@ -414,11 +722,12 @@ class VideoProcessor:
             return False
 
         options = options or {}
-        zoom_level = options.get("zoom_level", 1.0)
+        zoom_level = options.get("zoom_level", 0.1)
         crop_mode = options.get("crop_mode", "center")
         target_duration = options.get("target_duration", 60)
         speed_factor = options.get("speed_factor")
         overlay_text = options.get("add_text")
+        text_overlay = options.get("text_overlay")
 
         info = self.get_video_info(input_path)
         if not info:
@@ -492,15 +801,94 @@ class VideoProcessor:
             logger.info(f"Scaling {width}x{height} to {shorts_width}x{shorts_height}")
             filters.append(f"scale={shorts_width}:{shorts_height}")
 
-        # Add text overlay if specified
-        if overlay_text:
-            escaped_text = overlay_text.replace("'", "'\\''")
-            filters.append(
-                f"drawtext=text='{escaped_text}':"
-                f"fontsize=36:fontcolor=white:"
-                f"box=1:boxcolor=black@0.5:"
-                f"x=(w-text_w)/2:y=h-text_h-30"
-            )
+        # Handle text overlay
+        text_overlay_image = None
+        has_drawtext = self._has_drawtext_filter()
+
+        if text_overlay or overlay_text:
+            # Determine text and config
+            if text_overlay:
+                text = text_overlay.get("text", "")
+                config = text_overlay
+            else:
+                text = overlay_text
+                config = {
+                    "text": overlay_text,
+                    "position_x": "center",
+                    "position_y": "bottom",
+                    "text_align": "center",
+                    "font_size": 36,
+                    "font_color": "white",
+                    "bg_color": "black",
+                    "bg_opacity": 0.5,
+                    "border_width": 0,
+                    "border_color": "black",
+                }
+
+            if text:
+                pos_x_raw = config.get("position_x", "center")
+                pos_y_raw = config.get("position_y", "bottom")
+                x_pos = self._parse_position(pos_x_raw, "x", shorts_width)
+                y_pos = self._parse_position(pos_y_raw, "y", shorts_height)
+                text_align = config.get("text_align", "center")
+
+                if has_drawtext:
+                    escaped_text = text.replace("'", "'\\''")
+                    font_size = config.get("font_size", 36)
+                    font_color = config.get("font_color", "white")
+                    bg_color = config.get("bg_color", "black")
+                    bg_opacity = config.get("bg_opacity", 0.5)
+                    border_width = config.get("border_width", 0)
+                    border_color = config.get("border_color", "black")
+
+                    drawtext_parts = [
+                        f"drawtext=text='{escaped_text}'",
+                        f"fontsize={font_size}",
+                        f"fontcolor={font_color}",
+                        f"x={x_pos}",
+                        f"y={y_pos}",
+                    ]
+
+                    if text_align:
+                        drawtext_parts.append(f"fix_bounds=1")
+
+                    if bg_opacity > 0:
+                        drawtext_parts.extend([
+                            "box=1",
+                            f"boxcolor={bg_color}@{bg_opacity}",
+                            "boxborderw=4",
+                        ])
+
+                    if border_width > 0:
+                        drawtext_parts.extend([
+                            f"borderw={border_width}",
+                            f"bordercolor={border_color}",
+                        ])
+
+                    filters.append(":".join(drawtext_parts))
+                    logger.info(f"Text overlay (drawtext): '{text}' at ({x_pos}, {y_pos})")
+                elif PIL_AVAILABLE:
+                    pil_x = self._evaluate_position_for_pil(pos_x_raw, "x", shorts_width)
+                    pil_y = self._evaluate_position_for_pil(pos_y_raw, "y", shorts_height)
+                    text_overlay_image = TextOverlayFallback.create_text_overlay_image(
+                        text=text,
+                        width=shorts_width,
+                        height=shorts_height,
+                        font_size=config.get("font_size", 36),
+                        font_color=config.get("font_color", "white"),
+                        bg_color=config.get("bg_color", "black"),
+                        bg_opacity=config.get("bg_opacity", 0.5),
+                        border_width=config.get("border_width", 0),
+                        border_color=config.get("border_color", "black"),
+                        position_x=pil_x,
+                        position_y=pil_y,
+                    )
+                    if text_overlay_image:
+                        logger.info(f"Text overlay (PIL fallback): '{text}' image created at ({pil_x}, {pil_y})")
+                    else:
+                        logger.error("Failed to create text overlay image")
+                else:
+                    logger.error("Text overlay requested but drawtext not available and Pillow not installed")
 
         # Log the filter chain for debugging
         logger.info(f"Filter chain: {filters}")
@@ -562,7 +950,51 @@ class VideoProcessor:
         success, error = self._run_ffmpeg(args)
         if not success:
             logger.error(f"Process for shorts failed: {error}")
+            # Clean up temp text overlay image if it exists
+            if text_overlay_image and os.path.exists(text_overlay_image):
+                os.remove(text_overlay_image)
             return False
+
+        # Apply PIL text overlay as second pass if needed
+        if text_overlay_image and os.path.exists(text_overlay_image):
+            logger.info("Applying PIL text overlay as second pass")
+            temp_output = output_path + ".text_overlay.mp4"
+            overlay_args = [
+                "-i", output_path,
+                "-i", text_overlay_image,
+                "-filter_complex", "[0:v][1:v]overlay=0:0:enable='between(t,0,99999)'[v]",
+                "-map", "[v]",
+                "-c:v", "libx264",
+                "-preset", "fast",
+                "-crf", "23",
+                "-movflags", "+faststart",
+            ]
+            
+            # Copy audio if present
+            if has_audio:
+                overlay_args.extend([
+                    "-map", "0:a",
+                    "-c:a", "aac",
+                    "-b:a", "128k",
+                ])
+            else:
+                overlay_args.append("-an")
+            
+            overlay_args.append(temp_output)
+            
+            overlay_success, overlay_error = self._run_ffmpeg(overlay_args)
+            
+            # Clean up temp text overlay image
+            os.remove(text_overlay_image)
+            
+            if overlay_success:
+                os.replace(temp_output, output_path)
+                logger.info("PIL text overlay applied successfully")
+            else:
+                logger.error(f"PIL text overlay failed: {overlay_error}")
+                if os.path.exists(temp_output):
+                    os.remove(temp_output)
+                # Continue with original video (no text overlay)
 
         logger.info(f"Video processed for shorts: {output_path}")
         return True
