@@ -1,6 +1,10 @@
 # Cloudflare Worker Deployment
 
-## Setup
+## Simple Static Site
+
+This is a **static landing site** - no API endpoints needed. Cloudflare Workers serves the HTML/CSS/JS files directly.
+
+## Deploy
 
 1. Install Wrangler CLI:
 ```bash
@@ -12,33 +16,24 @@ npm install -g wrangler
 wrangler login
 ```
 
-3. Deploy the worker:
+3. Deploy:
 ```bash
 wrangler deploy
 ```
 
+4. Add your custom domain in Cloudflare Dashboard:
+   - Workers & Pages → spoolup → Custom Domains → Add `spoolup.alihadiozturk.com`
+
+## What Gets Deployed
+
+All files in the `landing/` directory:
+- HTML pages (index.html, privacy-policy.html, etc.)
+- CSS styles (css/styles.css)
+- JavaScript (js/main.js)
+- Logo image (assets/logo.png)
+
 ## Configuration
 
-- **Worker name**: `spoolup-landing`
-- **Static assets**: Served from `./landing` directory
-- **Worker script**: `worker/src/index.ts`
-
-## Domain Setup
-
-After deployment, configure your custom domain in Cloudflare Dashboard:
-1. Go to Workers & Pages
-2. Select `spoolup-landing`
-3. Add Custom Domain: `spoolup.alihadiozturk.com`
-
-## Future API Endpoints
-
-The worker includes placeholder API routes for TikTok OAuth:
-- `/api/auth/tiktok/callback` - OAuth callback handler
-
-## Environment Variables
-
-Set secrets via Wrangler:
-```bash
-wrangler secret put TIKTOK_CLIENT_ID
-wrangler secret put TIKTOK_CLIENT_SECRET
-```
+- **Worker name**: `spoolup`
+- **Static assets**: `landing/` directory
+- **No API endpoints** - pure static site
