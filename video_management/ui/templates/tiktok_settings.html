@@ -1,0 +1,308 @@
+{% extends "base.html" %}
+
+{% block title %}TikTok Settings - Video Management System{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 0.5rem;">
+        <a href="/" style="color: var(--text-secondary); text-decoration: none; font-size: 0.875rem;">← Back to Dashboard</a>
+    </div>
+    <h1>TikTok Settings</h1>
+    <p>Configure TikTok integration and manage your account connection</p>
+</div>
+
+<div class="grid" style="grid-template-columns: 1fr 1fr;">
+    <!-- Connection Status -->
+    <div class="card">
+        <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">Account Connection</h2>
+        
+        <div id="connection-status" style="margin-bottom: 1rem;">
+            <div class="loading-skeleton" style="height: 80px;"></div>
+        </div>
+        
+        <div id="connection-actions" style="display: flex; gap: 0.75rem;">
+            <button class="btn btn-primary" id="btn-connect" onclick="tiktokSettings.connect()" style="flex: 1; justify-content: center;">
+                Connect TikTok Account
+            </button>
+            <button class="btn btn-secondary" id="btn-refresh" onclick="tiktokSettings.refreshToken()" style="display: none;">
+                Refresh Token
+            </button>
+            <button class="btn btn-danger" id="btn-disconnect" onclick="tiktokSettings.disconnect()" style="display: none;">
+                Disconnect
+            </button>
+        </div>
+    </div>
+    
+    <!-- App Credentials -->
+    <div class="card">
+        <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">App Credentials</h2>
+        
+        <div style="background: var(--background); padding: 0.75rem; border-radius: 8px; margin-bottom: 1rem; font-size: 0.8125rem; color: var(--text-secondary);">
+            <strong style="color: var(--text-primary);">Required:</strong> Create a TikTok app at <a href="https://developers.tiktok.com" target="_blank" style="color: var(--primary-color);">developers.tiktok.com</a> and enter your credentials below.
+        </div>
+        
+        <form id="credentials-form" onsubmit="return false;">
+            <div class="form-group">
+                <label class="form-label" for="client-key">Client Key</label>
+                <input
+                    type="text"
+                    id="client-key"
+                    class="form-control"
+                    placeholder="Enter your TikTok client key"
+                >
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="client-secret">Client Secret</label>
+                <input
+                    type="password"
+                    id="client-secret"
+                    class="form-control"
+                    placeholder="Enter your TikTok client secret"
+                >
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="redirect-uri">Redirect URI</label>
+                <input
+                    type="text"
+                    id="redirect-uri"
+                    class="form-control"
+                    value="http://localhost:8000/api/tiktok/auth/callback"
+                    placeholder="http://localhost:8000/api/tiktok/auth/callback"
+                >
+                <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.25rem;">
+                    Must match the redirect URI configured in your TikTok app.
+                </div>
+            </div>
+            <button class="btn btn-primary" onclick="tiktokSettings.saveCredentials()" style="width: 100%; justify-content: center;">
+                Save Credentials
+            </button>
+        </form>
+    </div>
+</div>
+
+<!-- Upload Defaults -->
+<div class="card mt-4">
+    <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">Upload Defaults</h2>
+    
+    <form id="defaults-form" onsubmit="return false;">
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem;">
+            <div class="form-group">
+                <label class="form-label" for="default-privacy">Default Privacy</label>
+                <select id="default-privacy" class="form-control">
+                    <option value="public">Public</option>
+                    <option value="mutual_follow_friends">Mutual Follow Friends</option>
+                    <option value="followers">Followers Only</option>
+                    <option value="private">Private</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label" for="poll-interval">Status Poll Interval (seconds)</label>
+                <input
+                    type="number"
+                    id="poll-interval"
+                    class="form-control"
+                    min="10"
+                    max="300"
+                    value="30"
+                >
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label" for="max-poll-time">Max Poll Time (seconds)</label>
+                <input
+                    type="number"
+                    id="max-poll-time"
+                    class="form-control"
+                    min="60"
+                    max="3600"
+                    value="600"
+                >
+            </div>
+        </div>
+        
+        <div style="display: flex; gap: 1rem; margin-top: 1rem;">
+            <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                <input type="checkbox" id="default-comments" checked style="width: 16px; height: 16px;">
+                <span>Allow comments by default</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                <input type="checkbox" id="default-duet" checked style="width: 16px; height: 16px;">
+                <span>Allow duet by default</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                <input type="checkbox" id="default-stitch" checked style="width: 16px; height: 16px;">
+                <span>Allow stitch by default</span>
+            </label>
+        </div>
+        
+        <button class="btn btn-primary" onclick="tiktokSettings.saveDefaults()" style="margin-top: 1rem;">
+            Save Defaults
+        </button>
+    </form>
+</div>
+
+<!-- API Constraints Info -->
+<div class="card mt-4">
+    <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">TikTok API Constraints</h2>
+    
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
+        <div style="background: var(--background); padding: 1rem; border-radius: 8px;">
+            <div style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.25rem;">Max File Size</div>
+            <div style="font-weight: 600; font-size: 1.125rem;">287.6 MB</div>
+        </div>
+        <div style="background: var(--background); padding: 1rem; border-radius: 8px;">
+            <div style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.25rem;">Max Duration</div>
+            <div style="font-weight: 600; font-size: 1.125rem;">10 minutes</div>
+        </div>
+        <div style="background: var(--background); padding: 1rem; border-radius: 8px;">
+            <div style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.25rem;">Chunk Size</div>
+            <div style="font-weight: 600; font-size: 1.125rem;">5 - 64 MB</div>
+        </div>
+        <div style="background: var(--background); padding: 1rem; border-radius: 8px;">
+            <div style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.25rem;">Required Scopes</div>
+            <div style="font-weight: 600; font-size: 0.875rem;">video.publish</div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+class TikTokSettings {
+    constructor() {
+        this.init();
+    }
+
+    async init() {
+        await this.loadAccountInfo();
+    }
+
+    async loadAccountInfo() {
+        const container = document.getElementById('connection-status');
+        const btnConnect = document.getElementById('btn-connect');
+        const btnRefresh = document.getElementById('btn-refresh');
+        const btnDisconnect = document.getElementById('btn-disconnect');
+
+        if (!container) return;
+
+        try {
+            const response = await window.app.apiRequest('/api/tiktok/account');
+            if (!response) {
+                // User was redirected to login (401)
+                return;
+            }
+
+            if (!response.ok) {
+                container.innerHTML = `
+                    <div style="display: flex; align-items: center; gap: 0.75rem; padding: 1rem; background: var(--background); border-radius: 8px;">
+                        <span style="width: 12px; height: 12px; border-radius: 50%; background: var(--error-color);"></span>
+                        <span>Not connected</span>
+                    </div>
+                `;
+                btnConnect.style.display = 'block';
+                btnRefresh.style.display = 'none';
+                btnDisconnect.style.display = 'none';
+                return;
+            }
+
+            const data = await response.json();
+
+            if (data.connected) {
+                container.innerHTML = `
+                    <div style="display: flex; align-items: center; gap: 0.75rem; padding: 1rem; background: var(--background); border-radius: 8px;">
+                        <span style="width: 12px; height: 12px; border-radius: 50%; background: var(--success-color);"></span>
+                        <div>
+                            <div style="font-weight: 600;">${data.username || 'Connected'}</div>
+                            ${data.follower_count ? `<div style="font-size: 0.8125rem; color: var(--text-secondary);">${data.follower_count.toLocaleString()} followers</div>` : ''}
+                        </div>
+                    </div>
+                `;
+                btnConnect.style.display = 'none';
+                btnRefresh.style.display = 'block';
+                btnDisconnect.style.display = 'block';
+            } else {
+                container.innerHTML = `
+                    <div style="display: flex; align-items: center; gap: 0.75rem; padding: 1rem; background: var(--background); border-radius: 8px;">
+                        <span style="width: 12px; height: 12px; border-radius: 50%; background: var(--error-color);"></span>
+                        <span>Not connected</span>
+                    </div>
+                `;
+                btnConnect.style.display = 'block';
+                btnRefresh.style.display = 'none';
+                btnDisconnect.style.display = 'none';
+            }
+        } catch (err) {
+            console.error('Failed to load account info:', err);
+            container.innerHTML = `
+                <div class="alert alert-error">
+                    Failed to load account info. 
+                    <button onclick="tiktokSettings.loadAccountInfo()" style="margin-left: 0.5rem; text-decoration: underline; cursor: pointer; background: none; border: none; color: inherit;">Retry</button>
+                </div>
+            `;
+        }
+    }
+
+    async connect() {
+        try {
+            const response = await window.app.apiRequest('/api/tiktok/auth');
+            if (!response || !response.ok) {
+                const error = await response.json();
+                window.app.showToast(error.detail || 'Failed to get auth URL', 'error');
+                return;
+            }
+
+            const data = await response.json();
+            if (data.auth_url) {
+                // Open auth URL in new window
+                window.open(data.auth_url, '_blank', 'width=600,height=700');
+                window.app.showToast('TikTok auth window opened', 'info');
+            }
+        } catch (err) {
+            window.app.showToast('Failed to initiate connection', 'error');
+        }
+    }
+
+    async refreshToken() {
+        try {
+            const response = await window.app.apiRequest('/api/tiktok/auth/refresh', {
+                method: 'POST'
+            });
+            if (!response) return;
+
+            if (response.ok) {
+                const data = await response.json();
+                window.app.showToast(`Token refreshed! Expires in ${data.expires_in}s`, 'success');
+                this.loadAccountInfo();
+            } else {
+                const error = await response.json();
+                window.app.showToast(error.detail || 'Failed to refresh token', 'error');
+            }
+        } catch (err) {
+            window.app.showToast('Failed to refresh token', 'error');
+        }
+    }
+
+    disconnect() {
+        // Note: Actual disconnect would require deleting the token file
+        // For now, just show a message
+        window.app.showToast('To disconnect, delete the tiktok_token.json file from the server', 'info');
+    }
+
+    async saveCredentials() {
+        // Note: In a real implementation, this would save to the database or config file
+        window.app.showToast('Credentials must be set via environment variables or .env file', 'info');
+    }
+
+    async saveDefaults() {
+        // Note: In a real implementation, this would save to the database or config file
+        window.app.showToast('Defaults must be set via environment variables or .env file', 'info');
+    }
+}
+
+let tiktokSettings;
+document.addEventListener('DOMContentLoaded', () => {
+    tiktokSettings = new TikTokSettings();
+});
+</script>
+{% endblock %}

@@ -1,0 +1,7 @@
+{
+    "name": "spoolup",
+    "compatibility_date": "2024-12-05",
+    "assets": {
+        "directory": "./landing"
+    }
+}

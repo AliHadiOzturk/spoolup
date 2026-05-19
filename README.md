@@ -331,6 +331,41 @@ MIT License - Feel free to modify and distribute.
 
 ---
 
+## 🎬 Video Management System (New!)
+
+A new web-based video management system is now included for uploading timelapse videos to YouTube Shorts and TikTok.
+
+### Features
+
+- **Video Discovery**: Automatically discovers timelapse videos from Moonraker-based 3D printers
+- **Video Processing**: Converts 16:9 raw footage to 9:16 vertical format using FFmpeg
+- **Multi-Platform Upload**: Uploads to YouTube Shorts and TikTok using official APIs
+- **Analytics Dashboard**: Tracks views, likes, comments, and shares with midnight sync
+- **Web Interface**: Modern dashboard for managing videos, uploads, and analytics
+- **Docker Support**: Easy deployment with Docker Compose
+
+### Quick Start with Docker
+
+```bash
+# Clone and configure
+git clone https://github.com/AliHadiOzturk/spoolup.git
+cd spoolup
+cp video_management/.env.example .env
+# Edit .env with your settings
+
+# Start with Docker Compose
+docker-compose up -d
+
+# Access the web interface at http://localhost:8000
+```
+
+For detailed setup, see:
+- [Video Management System README](video_management/README.md)
+- [Docker Setup Guide](docs/docker-setup.md)
+- [Security Policy](SECURITY.md)
+
+---
+
 **Happy Printing! 🎉**
 
 *SpoolUp - Because your prints deserve an audience.*
