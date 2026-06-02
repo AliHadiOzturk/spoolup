@@ -303,24 +303,24 @@ class MoonrakerClient:
                         logger.info(f"Triggering print start callback for: {filename}")
                         self._initial_state_handled = True
                         self.on_print_started(filename)
-                elif new_state == "complete" and old_state in [
-                    "printing",
-                    "error",
-                    "paused",
-                ]:
-                    self._initial_state_handled = False
-                    self.on_print_completed(self.current_file)
-                elif new_state == "cancelled" and old_state in [
-                    "printing",
-                    "error",
-                    "paused",
-                ]:
-                    self._initial_state_handled = False
-                    self.on_print_cancelled(self.current_file)
-                elif new_state == "error" and old_state == "printing":
-                    logger.warning(
-                        "Print error detected - stream continuing. Waiting for recovery or completion..."
-                    )
+                    elif new_state == "complete" and old_state in [
+                        "printing",
+                        "error",
+                        "paused",
+                    ]:
+                        self._initial_state_handled = False
+                        self.on_print_completed(self.current_file)
+                    elif new_state == "cancelled" and old_state in [
+                        "printing",
+                        "error",
+                        "paused",
+                    ]:
+                        self._initial_state_handled = False
+                        self.on_print_cancelled(self.current_file)
+                    elif new_state == "error" and old_state == "printing":
+                        logger.warning(
+                            "Print error detected - stream continuing. Waiting for recovery or completion..."
+                        )
 
         self._extract_temperatures(status)
         self._extract_display_status(status)
@@ -1634,6 +1634,9 @@ class YouTubeStreamer:
         logger.warning(f"stop_streaming() called from:\n{traceback.format_stack()[-3]}")
         try:
             if self.live_broadcast:
+                delay = 15
+                logger.info(f"Waiting {delay}s before ending broadcast...")
+                time.sleep(delay)
                 self._transition_broadcast(self.live_broadcast["id"], "complete")
 
             if self.ffmpeg_process:
