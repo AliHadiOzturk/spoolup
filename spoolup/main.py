@@ -1022,6 +1022,44 @@ class YouTubeStreamer:
         else:
             logger.warning("FFmpeg process not available")
 
+    def _wait_for_stream_healthy(self, stream_id: str, timeout: int = 60) -> bool:
+        """Wait for stream to be active with good health before going live."""
+        logger.info(f"Waiting for stream {stream_id} to be healthy...")
+        start_time = time.time()
+        last_status = None
+        last_health = None
+        while time.time() - start_time < timeout:
+            try:
+                stream = (
+                    self.youtube.liveStreams()
+                    .list(part="status", id=stream_id)
+                    .execute()
+                )
+                if stream.get("items"):
+                    status = stream["items"][0]["status"]["streamStatus"]
+                    health = stream["items"][0]["status"].get("healthStatus", {})
+                    health_status = health.get("status", "unknown")
+
+                    if status != last_status or health_status != last_health:
+                        logger.info(
+                            f"Stream health check: status={status}, health={health_status}"
+                        )
+                        last_status = status
+                        last_health = health_status
+
+                    if status == "active" and health_status == "good":
+                        logger.info("Stream is active and healthy")
+                        return True
+                    elif status == "error":
+                        logger.error("Stream is in error state")
+                        return False
+
+            except Exception as e:
+                logger.warning(f"Stream health check failed: {e}")
+            time.sleep(2)
+        logger.warning(f"Stream did not become healthy within {timeout} seconds")
+        return False
+
     def _test_rtmp_connectivity(self):
         import socket
 
@@ -1484,7 +1522,12 @@ class YouTubeStreamer:
                     logger.error("Failed to transition to testing state")
                     return False
 
-                time.sleep(10)
+                # Wait for stream to be healthy before going live
+                # YouTube requires good health to actually show the broadcast
+                if not self._wait_for_stream_healthy(stream_id, timeout=45):
+                    logger.warning(
+                        "Stream not healthy before live transition, attempting anyway"
+                    )
 
                 live_success = False
                 for attempt in range(10):
