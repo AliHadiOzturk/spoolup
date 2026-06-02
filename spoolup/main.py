@@ -645,26 +645,42 @@ class YouTubeStreamer:
             "ffmpeg",
             "-hide_banner",
             "-loglevel", "warning",
-            # Input flags: allow some buffering for network streams but discard corrupt frames
+            # Read input at native frame rate (critical for network streams)
+            "-re",
+            # Input flags: discard corrupt frames but allow buffering
             "-fflags", "+discardcorrupt",
+            # Increase stream analysis for better MJPEG detection on network streams
+            "-probesize", "32M",
+            "-analyzeduration", "5M",
+            # Input thread queue: buffer frames to prevent starvation from bursty MJPEG
+            "-thread_queue_size", "512",
+            # Use wallclock timestamps for network MJPEG (no inherent timestamps)
+            "-use_wallclock_as_timestamps", "1",
             "-f", "mjpeg",
+            # Specify expected frame rate for MJPEG timing
+            "-r", str(fps),
             "-i", webcam_url,
             # Silent audio source (required by YouTube)
             "-f", "lavfi",
             "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
-            # Video filter: enforce framerate (round=down avoids duplicating frames),
-            # scale to target resolution, ensure YUV420P for compatibility
+            # Video filter: scale to target resolution only
+            # Do NOT force fps here - let -re and -r handle timing
             "-filter_complex",
-            f"[0:v]fps={fps}:round=down,scale={resolution},format=yuv420p[v]",
+            f"[0:v]scale={resolution}[v]",
             "-map", "[v]",
             "-map", "1:a",
+            # Ensure constant frame rate output
+            "-vsync", "cfr",
+            # Muxer queue: prevent blocking when audio/video sync is temporarily off
+            "-max_muxing_queue_size", "1024",
             # Video encoding options
             *video_opts,
-            "-threads", "0",
             # Audio encoding
             "-c:a", "aac",
             "-b:a", "128k",
             "-ar", "44100",
+            # Stop when shortest input ends (prevents infinite anullsrc)
+            "-shortest",
             # Output format
             "-f", "flv",
             self.stream_url,
@@ -1182,9 +1198,9 @@ class YouTubeStreamer:
                     f"Stream issue detected: starvation={is_starvation}, inactive={is_inactive}, bad_health={is_bad_health} ({consecutive_issues} consecutive checks)"
                 )
 
-                if consecutive_issues >= 3:
+                if consecutive_issues >= 5:
                     logger.error(
-                        "Stream unhealthy for 90 seconds - attempting FFmpeg restart"
+                        "Stream unhealthy for 150 seconds - attempting FFmpeg restart"
                     )
                     self._restart_ffmpeg_stream()
                     consecutive_issues = 0
