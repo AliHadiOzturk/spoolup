@@ -689,8 +689,6 @@ class YouTubeStreamer:
             "ffmpeg",
             "-hide_banner",
             "-loglevel", "warning",
-            # Read input at native frame rate (critical for network streams)
-            "-re",
             # Input flags: discard corrupt frames but allow buffering
             "-fflags", "+discardcorrupt",
             # Increase stream analysis for better MJPEG detection on network streams
@@ -701,20 +699,15 @@ class YouTubeStreamer:
             # Use wallclock timestamps for network MJPEG (no inherent timestamps)
             "-use_wallclock_as_timestamps", "1",
             "-f", "mjpeg",
-            # Specify expected frame rate for MJPEG timing
-            "-r", str(fps),
             "-i", webcam_url,
             # Silent audio source (required by YouTube)
             "-f", "lavfi",
             "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
-            # Video filter: scale to target resolution only
-            # Do NOT force fps here - let -re and -r handle timing
+            # Video filter: enforce framerate, scale, ensure YUV420P for compatibility
             "-filter_complex",
-            f"[0:v]scale={resolution}[v]",
+            f"[0:v]fps={fps}:round=down,scale={resolution},format=yuv420p[v]",
             "-map", "[v]",
             "-map", "1:a",
-            # Ensure constant frame rate output
-            "-vsync", "cfr",
             # Muxer queue: prevent blocking when audio/video sync is temporarily off
             "-max_muxing_queue_size", "1024",
             # Video encoding options
