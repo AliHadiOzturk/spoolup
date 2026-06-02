@@ -459,22 +459,34 @@ class MoonrakerClient:
             filename = virtual_sdcard.get("filename", "")
             stats["filename"] = filename if filename else "Unknown"
 
+            # Speed and flow from toolhead (may not be available on all printers)
             speed = toolhead.get("speed", 0)
-            stats["speed"] = f"{speed:.0f} mm/s" if speed else "100 mm/s"
+            stats["speed"] = f"{speed:.0f} mm/s" if speed else "N/A"
 
-            # Flow rate in mm³/s
+            # Flow rate in mm³/s (not always exposed by Moonraker)
             flow_rate = toolhead.get("flow_rate", 0)
-            stats["flow_rate"] = f"{flow_rate:.1f} mm³/s" if flow_rate else "0.0 mm³/s"
+            if not flow_rate:
+                # Try to calculate from extruder position changes if available
+                # This is a fallback - actual flow rate may differ
+                flow_rate = 0
+            stats["flow_rate"] = f"{flow_rate:.1f} mm³/s" if flow_rate else "N/A"
 
             filament_mm = print_stats.get("filament_used", 0)
             stats["filament_used"] = (
                 f"{filament_mm / 1000:.2f} m" if filament_mm else "0.00 m"
             )
 
-            # Layer info is in print_stats.info, not virtual_sdcard
+            # Layer info - try print_stats.info first, fallback to virtual_sdcard
             print_info = print_stats.get("info", {})
             current_layer = print_info.get("current_layer", 0)
             total_layers = print_info.get("total_layer", 0)
+            
+            # Fallback to virtual_sdcard if print_stats doesn't have layer data
+            if not current_layer and virtual_sdcard:
+                current_layer = virtual_sdcard.get("layer", 0)
+            if not total_layers and virtual_sdcard:
+                total_layers = virtual_sdcard.get("layer_count", 0)
+            
             stats["current_layer"] = current_layer if current_layer else 0
             stats["total_layers"] = total_layers if total_layers else 0
 
@@ -493,8 +505,8 @@ class MoonrakerClient:
             else:
                 stats["total_time"] = "0:00:00"
 
-            # Progress comes from display_status, not virtual_sdcard
-            progress = display_status.get("progress", 0)
+            # Progress - prefer virtual_sdcard (more accurate), fallback to display_status
+            progress = virtual_sdcard.get("progress", 0) or display_status.get("progress", 0)
             if progress > 0 and print_duration > 0:
                 estimated_total = print_duration / progress
                 remaining = estimated_total - print_duration
