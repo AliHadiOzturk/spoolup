@@ -329,8 +329,8 @@ class MoonrakerClient:
         temp_keys = [
             "extruder",
             "heater_bed",
-            "temperature_sensor chamber",
-            "temperature_sensor mcu",
+            "temperature_sensor chamber_temp",
+            "temperature_sensor mcu_temp",
             "temperature_fan chamber_fan",
         ]
         for key in temp_keys:
@@ -436,8 +436,9 @@ class MoonrakerClient:
                 ("extruder", ""),
                 ("heater_bed", ""),
                 ("display_status", ""),
-                ("temperature_sensor chamber", ""),
-                ("temperature_sensor mcu", ""),
+                ("temperature_sensor chamber_temp", ""),
+                ("temperature_sensor mcu_temp", ""),
+                ("temperature_fan chamber_fan", ""),
             ]
             response = requests.get(
                 f"{self.base_url}/printer/objects/query",
@@ -544,23 +545,35 @@ class MoonrakerClient:
             stats["bed_temp_str"] = f"{bed_temp:.1f}°C" if bed_temp else "N/A"
             stats["bed_target_str"] = f"{bed_target:.0f}°C" if bed_target else "N/A"
 
-            # Chamber - try multiple sensor names from query response
-            chamber_sensor = status.get("temperature_sensor chamber", {})
+            # Chamber - try temperature_sensor chamber_temp first, fallback to old name
+            chamber_sensor = status.get("temperature_sensor chamber_temp", {})
+            if not chamber_sensor:
+                chamber_sensor = status.get("temperature_sensor chamber", {})
             chamber_temp = chamber_sensor.get("temperature", 0)
             if not chamber_temp:
-                # Fallback to cached temps
-                chamber_temp = self._temperatures.get("temperature_sensor chamber", 0)
+                # Fallback to cached temps with both names
+                chamber_temp = self._temperatures.get("temperature_sensor chamber_temp", 0) or \
+                              self._temperatures.get("temperature_sensor chamber", 0)
             stats["chamber_temp"] = chamber_temp
             stats["chamber_temp_str"] = f"{chamber_temp:.1f}°C" if chamber_temp else "N/A"
 
-            # MCU - try query response first
-            mcu_sensor = status.get("temperature_sensor mcu", {})
+            # MCU - try temperature_sensor mcu_temp first, fallback to old name
+            mcu_sensor = status.get("temperature_sensor mcu_temp", {})
+            if not mcu_sensor:
+                mcu_sensor = status.get("temperature_sensor mcu", {})
             mcu_temp = mcu_sensor.get("temperature", 0)
             if not mcu_temp:
-                # Fallback to cached temps
-                mcu_temp = self._temperatures.get("temperature_sensor mcu", 0)
+                # Fallback to cached temps with both names
+                mcu_temp = self._temperatures.get("temperature_sensor mcu_temp", 0) or \
+                          self._temperatures.get("temperature_sensor mcu", 0)
             stats["mcu_temp"] = mcu_temp
             stats["mcu_temp_str"] = f"{mcu_temp:.1f}°C" if mcu_temp else "N/A"
+
+            # Chamber fan target (for temperature control)
+            chamber_fan = status.get("temperature_fan chamber_fan", {})
+            if chamber_fan:
+                stats["chamber_target"] = chamber_fan.get("target", 0)
+                stats["chamber_fan_speed"] = chamber_fan.get("speed", 0)
 
         except Exception as e:
             logger.error(f"Failed to get print stats: {e}")
