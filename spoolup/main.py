@@ -455,8 +455,16 @@ class MoonrakerClient:
             heater_bed = status.get("heater_bed", {})
             display_status = status.get("display_status", {})
 
+            # File name
+            filename = virtual_sdcard.get("filename", "")
+            stats["filename"] = filename if filename else "Unknown"
+
             speed = toolhead.get("speed", 0)
             stats["speed"] = f"{speed:.0f} mm/s" if speed else "100 mm/s"
+
+            # Flow rate in mm³/s
+            flow_rate = toolhead.get("flow_rate", 0)
+            stats["flow_rate"] = f"{flow_rate:.1f} mm³/s" if flow_rate else "0.0 mm³/s"
 
             filament_mm = print_stats.get("filament_used", 0)
             stats["filament_used"] = (
@@ -507,29 +515,40 @@ class MoonrakerClient:
             # Store raw progress for description updates
             stats["progress"] = progress
 
-            temps = self._temperatures
-
-            extruder_temp = extruder.get("temperature", 0) or temps.get("extruder", 0)
+            # Read temperatures directly from query response (more reliable than cached)
+            # Extruder
+            extruder_temp = extruder.get("temperature", 0)
             extruder_target = extruder.get("target", 0)
-            stats["extruder_temp"] = (
-                f"{extruder_temp:.0f}°C" if extruder_temp else "N/A"
-            )
-            stats["extruder_target"] = (
-                f"{extruder_target:.0f}°C" if extruder_target else "N/A"
-            )
+            stats["extruder_temp"] = extruder_temp
+            stats["extruder_target"] = extruder_target
+            stats["extruder_temp_str"] = f"{extruder_temp:.1f}°C" if extruder_temp else "N/A"
+            stats["extruder_target_str"] = f"{extruder_target:.0f}°C" if extruder_target else "N/A"
 
-            bed_temp = heater_bed.get("temperature", 0) or temps.get("heater_bed", 0)
+            # Bed
+            bed_temp = heater_bed.get("temperature", 0)
             bed_target = heater_bed.get("target", 0)
-            stats["bed_temp"] = f"{bed_temp:.0f}°C" if bed_temp else "N/A"
-            stats["bed_target"] = f"{bed_target:.0f}°C" if bed_target else "N/A"
+            stats["bed_temp"] = bed_temp
+            stats["bed_target"] = bed_target
+            stats["bed_temp_str"] = f"{bed_temp:.1f}°C" if bed_temp else "N/A"
+            stats["bed_target_str"] = f"{bed_target:.0f}°C" if bed_target else "N/A"
 
-            chamber_temp = temps.get("temperature_sensor chamber", 0) or temps.get(
-                "temperature_fan chamber_fan", 0
-            )
-            stats["chamber_temp"] = f"{chamber_temp:.0f}°C" if chamber_temp else "N/A"
+            # Chamber - try multiple sensor names from query response
+            chamber_sensor = status.get("temperature_sensor chamber", {})
+            chamber_temp = chamber_sensor.get("temperature", 0)
+            if not chamber_temp:
+                # Fallback to cached temps
+                chamber_temp = self._temperatures.get("temperature_sensor chamber", 0)
+            stats["chamber_temp"] = chamber_temp
+            stats["chamber_temp_str"] = f"{chamber_temp:.1f}°C" if chamber_temp else "N/A"
 
-            mcu_temp = temps.get("temperature_sensor mcu", 0)
-            stats["mcu_temp"] = f"{mcu_temp:.0f}°C" if mcu_temp else "N/A"
+            # MCU - try query response first
+            mcu_sensor = status.get("temperature_sensor mcu", {})
+            mcu_temp = mcu_sensor.get("temperature", 0)
+            if not mcu_temp:
+                # Fallback to cached temps
+                mcu_temp = self._temperatures.get("temperature_sensor mcu", 0)
+            stats["mcu_temp"] = mcu_temp
+            stats["mcu_temp_str"] = f"{mcu_temp:.1f}°C" if mcu_temp else "N/A"
 
         except Exception as e:
             logger.error(f"Failed to get print stats: {e}")
@@ -829,6 +848,7 @@ class YouTubeStreamer:
 
         if print_stats:
             # Extract statistics
+            filename = print_stats.get("filename", "")
             filament = print_stats.get("filament_used", "N/A")
             current_layer = print_stats.get("current_layer", "N/A")
             total_layers = print_stats.get("total_layers", "N/A")
@@ -836,10 +856,16 @@ class YouTubeStreamer:
             slicer_time = print_stats.get("slicer_time", "N/A")
             total_time = print_stats.get("total_time", "N/A")
             eta = print_stats.get("eta", "N/A")
-            extruder_temp = print_stats.get("extruder_temp", "N/A")
-            bed_temp = print_stats.get("bed_temp", "N/A")
-            chamber_temp = print_stats.get("chamber_temp", "N/A")
-            mcu_temp = print_stats.get("mcu_temp", "N/A")
+            speed = print_stats.get("speed", "N/A")
+            flow_rate = print_stats.get("flow_rate", "N/A")
+            
+            # Temperatures with current and target
+            extruder_temp_str = print_stats.get("extruder_temp_str", "N/A")
+            extruder_target_str = print_stats.get("extruder_target_str", "N/A")
+            bed_temp_str = print_stats.get("bed_temp_str", "N/A")
+            bed_target_str = print_stats.get("bed_target_str", "N/A")
+            chamber_temp_str = print_stats.get("chamber_temp_str", "N/A")
+            mcu_temp_str = print_stats.get("mcu_temp_str", "N/A")
 
             # Calculate progress for progress bar
             progress_pct = 0.0
@@ -857,24 +883,47 @@ class YouTubeStreamer:
             filled = int((progress_pct / 100) * bar_width)
             progress_bar = "█" * filled + "░" * (bar_width - filled)
             
-            # Format statistics in a table-like layout
-            lines.extend(
-                [
-                    f"Extruder:     {extruder_temp}",
-                    f"Bed:          {bed_temp}",
-                    f"Chamber:      {chamber_temp}",
-                    f"MCU:          {mcu_temp}",
-                    f"Filament:     {filament}",
-                    f"Layer:        {current_layer} of {total_layers}",
+            # File name section
+            if filename and filename != "Unknown":
+                lines.extend([
+                    f"📄 File: {filename}",
                     "",
-                    f"Progress:     {progress_pct:.1f}%",
-                    f"[{progress_bar}]",
-                    f"Elapsed:      {total_time}",
-                    f"Remaining:    {estimate}",
-                    f"ETA:          {eta}",
-                    f"Slicer Est:   {slicer_time}",
-                ]
-            )
+                ])
+            
+            # Temperatures section - table-like format
+            lines.extend([
+                "🌡️ Temperatures",
+                "━" * 40,
+                f"{'Name':<18} {'Current':<12} {'Target':<12}",
+                f"{'─'*18} {'─'*12} {'─'*12}",
+                f"{'Extruder':<18} {extruder_temp_str:<12} {extruder_target_str:<12}",
+                f"{'Heater Bed':<18} {bed_temp_str:<12} {bed_target_str:<12}",
+            ])
+            
+            if chamber_temp_str != "N/A":
+                lines.append(f"{'Chamber Temp':<18} {chamber_temp_str:<12} {'─'*12}")
+            
+            if mcu_temp_str != "N/A":
+                lines.append(f"{'Mcu Temp':<18} {mcu_temp_str:<12} {'─'*12}")
+            
+            lines.append("")
+            
+            # Print statistics section
+            lines.extend([
+                "📊 Print Statistics",
+                "━" * 40,
+                f"{'Speed:':<18} {speed}",
+                f"{'Flow:':<18} {flow_rate}",
+                f"{'Filament:':<18} {filament}",
+                f"{'Layer:':<18} {current_layer} of {total_layers}",
+                "",
+                f"{'Progress:':<18} {progress_pct:.1f}%",
+                f"[{progress_bar}]",
+                f"{'Estimate:':<18} {estimate}",
+                f"{'Slicer:':<18} {slicer_time}",
+                f"{'Total:':<18} {total_time}",
+                f"{'ETA:':<18} {eta}",
+            ])
         else:
             lines.append("Statistics will be updated as the print progresses...")
 
