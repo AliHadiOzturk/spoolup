@@ -1135,6 +1135,11 @@ class YouTubeStreamer:
                 time.sleep(3)
                 return self._transition_broadcast(broadcast_id, status)
 
+            if current_status == "testStarting" and status == "live":
+                logger.info("Broadcast is still transitioning to testing, waiting...")
+                time.sleep(5)
+                return self._transition_broadcast(broadcast_id, status)
+
             if status not in valid_transitions.get(current_status, []):
                 logger.warning(
                     f"Cannot transition from '{current_status}' to '{status}'"
