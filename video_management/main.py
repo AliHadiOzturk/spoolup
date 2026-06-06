@@ -23,6 +23,7 @@ sys.path.insert(0, str(BASE_DIR))
 
 from config import settings
 from database import init_db, run_migrations, dispose_engine, SessionLocal
+from database.models import User
 from ui.main import app
 from scheduler import TaskScheduler
 from upload_queue.worker import UploadWorker
@@ -33,6 +34,35 @@ logger = logging.getLogger(__name__)
 # Global instances
 upload_worker: UploadWorker = None
 scheduler: TaskScheduler = None
+
+
+def create_admin_user():
+    """Create admin user from environment variables if configured."""
+    if not settings.admin_username or not settings.admin_password:
+        return
+    
+    db = SessionLocal()
+    try:
+        existing = db.query(User).filter(User.username == settings.admin_username).first()
+        if existing:
+            logger.info(f"Admin user '{settings.admin_username}' already exists")
+            return
+        
+        from auth import get_password_hash
+        admin = User(
+            username=settings.admin_username,
+            password_hash=get_password_hash(settings.admin_password),
+            is_active=True,
+            is_admin=True,
+        )
+        db.add(admin)
+        db.commit()
+        logger.info(f"Admin user '{settings.admin_username}' created successfully")
+    except Exception as e:
+        logger.error(f"Failed to create admin user: {e}")
+        db.rollback()
+    finally:
+        db.close()
 
 
 def signal_handler(sig, frame):
@@ -71,6 +101,9 @@ def main():
     # Initialize database (run migrations or create tables)
     logger.info("Initializing database...")
     run_migrations()
+    
+    # Create admin user if configured
+    create_admin_user()
     
     # Start upload worker
     global upload_worker

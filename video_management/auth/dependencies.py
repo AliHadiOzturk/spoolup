@@ -94,3 +94,26 @@ async def get_current_active_user(
             detail="Inactive user",
         )
     return current_user
+
+
+async def get_current_admin_user(
+    current_user: Any = Depends(get_current_active_user),
+) -> Any:
+    """Validate that the current user is an admin.
+    
+    Args:
+        current_user: User object from get_current_active_user.
+    
+    Returns:
+        User object if admin.
+    
+    Raises:
+        HTTPException: If user is not an admin.
+    """
+    if not getattr(current_user, "is_admin", False):
+        logger.warning(f"Non-admin user '{current_user.username}' attempted admin access")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required",
+        )
+    return current_user

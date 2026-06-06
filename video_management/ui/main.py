@@ -27,11 +27,13 @@ from auth import (
     authenticate_user,
     create_access_token,
     get_current_active_user,
+    get_current_admin_user,
     get_current_user,
     get_password_hash,
     oauth2_scheme,
 )
 from auth.dependencies import override_get_user
+from auth.rate_limiter import rate_limit, SecurityHeadersMiddleware
 from config import settings
 from api.moonraker import MoonrakerClient
 from database import get_db, SessionLocal
@@ -330,6 +332,9 @@ app = FastAPI(
     version="2.0.0"
 )
 
+# Security headers middleware
+app.add_middleware(SecurityHeadersMiddleware)
+
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -380,17 +385,14 @@ if (VUE_DIST_DIR / "assets").exists():
 if (BASE_DIR / "static").exists():
     app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
-# Mount processed videos directory
-processed_dir = BASE_DIR.parent / "uploads" / "processed"
-if processed_dir.exists():
-    app.mount("/processed", StaticFiles(directory=str(processed_dir)), name="processed")
-
 # =============================================================================
 # Authentication Routes
 # =============================================================================
 
 @app.post("/api/auth/token", response_model=Token)
+@rate_limit(max_requests=5, window=60)
 async def login(
+    request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)
 ):
@@ -422,6 +424,44 @@ async def login(
 async def get_current_user_info(current_user: User = Depends(get_current_active_user)):
     """Get current authenticated user information."""
     return current_user
+
+
+@app.post("/api/auth/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+@rate_limit(max_requests=3, window=3600)
+async def register_user(
+    request: Request,
+    user_data: UserCreate,
+    db: Session = Depends(get_db)
+):
+    """Register a new user. Only available if ALLOW_REGISTRATION is enabled."""
+    if not settings.allow_registration:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Registration is disabled",
+        )
+    
+    # Check if username already exists
+    existing = get_user_by_username(db, user_data.username)
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Username already exists",
+        )
+    
+    # Create new user
+    user = User(
+        username=user_data.username,
+        password_hash=get_password_hash(user_data.password),
+        email=user_data.email,
+        is_active=True,
+        is_admin=False,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    
+    logger.info(f"New user registered: {user_data.username}")
+    return user
 
 
 # =============================================================================
@@ -490,7 +530,6 @@ async def get_video(
         processed.append(
             {
                 "id": pv.id,
-                "processed_path": pv.processed_path,
                 "format": pv.format,
                 "status": pv.status,
                 "duration_seconds": pv.duration_seconds,
@@ -500,7 +539,7 @@ async def get_video(
                 "uploads": pv_uploads,
             }
         )
-    
+
     return {
         "id": video.id,
         "printer_id": video.printer_id,
@@ -511,7 +550,6 @@ async def get_video(
         "category": video.category,
         "processing_options": video.processing_options,
         "metadata_status": video.metadata_status,
-        "original_path": video.original_path,
         "size_bytes": video.size_bytes,
         "duration_seconds": video.duration_seconds,
         "width": video.width,
@@ -519,7 +557,6 @@ async def get_video(
         "fps": video.fps,
         "created_at": video.created_at,
         "modified_at": video.modified_at,
-        "thumbnail_path": video.thumbnail_path,
         "moonraker_metadata_json": video.moonraker_metadata_json,
         "processed_videos": processed,
         "uploads": all_uploads,
@@ -768,6 +805,36 @@ async def delete_processed_video_endpoint(
     
     db.delete(processed)
     db.commit()
+
+
+@app.get("/api/videos/{video_id}/processed/{processed_id}/download")
+async def download_processed_video(
+    video_id: int,
+    processed_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Download a processed video file. Requires authentication."""
+    video = db.query(Video).filter(Video.id == video_id).first()
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+    
+    processed = db.query(ProcessedVideo).filter(
+        ProcessedVideo.id == processed_id,
+        ProcessedVideo.video_id == video_id,
+    ).first()
+    
+    if not processed:
+        raise HTTPException(status_code=404, detail="Processed video not found")
+    
+    if not os.path.exists(processed.processed_path):
+        raise HTTPException(status_code=404, detail="Video file not found on disk")
+    
+    return FileResponse(
+        processed.processed_path,
+        media_type="video/mp4",
+        filename=os.path.basename(processed.processed_path)
+    )
 
 
 # =============================================================================
