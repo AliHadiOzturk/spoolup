@@ -5,8 +5,6 @@ services:
     build:
       context: ./video_management
       dockerfile: Dockerfile
-    ports:
-      - "8000:8000"
     environment:
       - SECRET_KEY=${SECRET_KEY:-change-this-to-a-secure-random-string}
       - DATABASE_URL=sqlite:///data/vms.db
@@ -24,6 +22,7 @@ services:
       - ALLOW_REGISTRATION=${ALLOW_REGISTRATION:-false}
       - ADMIN_USERNAME=${ADMIN_USERNAME:-}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs

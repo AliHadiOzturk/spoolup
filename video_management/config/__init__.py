@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings
-from typing import Optional
+from pydantic import field_validator
+from typing import Optional, List
 import os
 from pathlib import Path
 
@@ -45,6 +46,16 @@ class Settings(BaseSettings):
     # Analytics
     analytics_sync_hour: int = 0  # Midnight
     analytics_sync_minute: int = 0
+    
+    # CORS
+    cors_origins: List[str] = ["http://localhost:3000", "http://localhost:5173"]
+    
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, v):
+        if isinstance(v, str):
+            return [origin.strip() for origin in v.split(",")]
+        return v
     
     # Security
     allow_registration: bool = False  # Set to true to allow public registration
