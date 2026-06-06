@@ -11,7 +11,7 @@ RUN npm install -g pnpm && pnpm install
 
 COPY . .
 
-RUN pnpm run build
+RUN npx vite build
 
 RUN npm install -g serve
 
