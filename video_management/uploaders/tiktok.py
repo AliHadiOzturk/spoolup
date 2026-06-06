@@ -37,8 +37,9 @@ TIKTOK_API_BASE = "https://open.tiktokapis.com/v2"
 OAUTH_AUTHORIZE_URL = "https://www.tiktok.com/v2/auth/authorize/"
 TOKEN_ENDPOINT = "https://open.tiktokapis.com/v2/oauth/token/"
 VIDEO_INIT_ENDPOINT = f"{TIKTOK_API_BASE}/post/publish/video/init/"
+VIDEO_DRAFT_INIT_ENDPOINT = f"{TIKTOK_API_BASE}/post/publish/inbox/video/init/"
 VIDEO_CREATE_ENDPOINT = f"{TIKTOK_API_BASE}/post/publish/video/create/"
-VIDEO_STATUS_ENDPOINT = f"{TIKTOK_API_BASE}/post/publish/status/"
+VIDEO_STATUS_ENDPOINT = f"{TIKTOK_API_BASE}/post/publish/status/fetch/"
 VIDEO_LIST_ENDPOINT = f"{TIKTOK_API_BASE}/video/list/"
 VIDEO_QUERY_ENDPOINT = f"{TIKTOK_API_BASE}/video/query/"
 USER_INFO_ENDPOINT = f"{TIKTOK_API_BASE}/user/info/"
@@ -310,6 +311,7 @@ class TikTokUploader:
         allow_comments: bool,
         allow_duet: bool,
         allow_stitch: bool,
+        draft: bool = True,
     ) -> Optional[Dict[str, Any]]:
         """Initialize a video upload session.
 
@@ -323,6 +325,7 @@ class TikTokUploader:
             allow_comments: Whether to allow comments.
             allow_duet: Whether to allow duets.
             allow_stitch: Whether to allow stitches.
+            draft: If True, upload as draft (default). If False, publish directly.
 
         Returns:
             The API response containing publish_id and upload_url, or None on failure.
@@ -349,13 +352,26 @@ class TikTokUploader:
             "disable_stitch": not allow_stitch,
         }
 
+        # Draft uploads don't support privacy_level, title, description, or interaction settings
+        endpoint = VIDEO_DRAFT_INIT_ENDPOINT if draft else VIDEO_INIT_ENDPOINT
+        
+        if draft:
+            body = {
+                "source_info": {
+                    "source": "FILE_UPLOAD",
+                    "video_size": file_size,
+                    "chunk_size": chunk_size,
+                    "total_chunk_count": total_chunk_count,
+                }
+            }
+
         logger.info(
-            f"Initializing upload: {title} ({file_size} bytes, {total_chunk_count} chunks, "
+            f"Initializing {'draft' if draft else 'direct'} upload: {title} ({file_size} bytes, {total_chunk_count} chunks, "
             f"privacy={privacy_status})"
         )
         try:
             response = requests.post(
-                VIDEO_INIT_ENDPOINT,
+                endpoint,
                 headers=self._get_auth_headers(),
                 json=body,
                 timeout=60,
@@ -387,7 +403,7 @@ class TikTokUploader:
             return None
 
         error_code = data.get("error", {}).get("code")
-        if error_code:
+        if error_code and error_code != "ok":
             error_msg = data.get("error", {}).get("message", "Unknown error")
             logger.error(f"Upload init API error {error_code}: {error_msg}")
             if error_code == "unaudited_client_can_only_post_to_private_accounts":
@@ -453,6 +469,8 @@ class TikTokUploader:
         allow_comments: bool = True,
         allow_duet: bool = True,
         allow_stitch: bool = True,
+        tags: Optional[List[str]] = None,
+        draft: bool = True,
     ) -> Optional[str]:
         """Upload a video to TikTok.
 
@@ -466,6 +484,9 @@ class TikTokUploader:
             allow_comments: Whether to allow comments.
             allow_duet: Whether to allow duets.
             allow_stitch: Whether to allow stitches.
+            tags: Optional list of tags to append as hashtags.
+            draft: If True (default), upload as draft for later editing.
+                   If False, publish directly.
 
         Returns:
             The publish_id for tracking the upload status, or None on failure.
@@ -480,9 +501,14 @@ class TikTokUploader:
             logger.error(f"Video file too large: {file_size} bytes (max: {MAX_FILE_SIZE})")
             return None
 
-        logger.info(f"Starting upload for {video_path} ({file_size} bytes)")
+        # Append tags as hashtags to title
+        if tags:
+            hashtag_str = " ".join([f"#{tag.strip().replace(' ', '')}" for tag in tags if tag.strip()])
+            if hashtag_str:
+                title = f"{title} {hashtag_str}" if title else hashtag_str
+                logger.info(f"Appended {len(tags)} tags to title")
 
-        # Determine chunk size
+        logger.info(f"Starting {'draft' if draft else 'direct'} upload for {video_path} ({file_size} bytes)")
         if file_size <= MAX_CHUNK_SIZE:
             chunk_size = file_size
             total_chunks = 1
@@ -502,6 +528,7 @@ class TikTokUploader:
             allow_comments=allow_comments,
             allow_duet=allow_duet,
             allow_stitch=allow_stitch,
+            draft=draft,
         )
 
         if not init_data:
@@ -554,7 +581,7 @@ class TikTokUploader:
             return None
 
         error_code = data.get("error", {}).get("code")
-        if error_code:
+        if error_code and error_code != "ok":
             error_msg = data.get("error", {}).get("message", "Unknown error")
             logger.error(f"Status API error {error_code}: {error_msg}")
             return None
@@ -595,7 +622,7 @@ class TikTokUploader:
             return None
 
         error_code = data.get("error", {}).get("code")
-        if error_code:
+        if error_code and error_code != "ok":
             error_msg = data.get("error", {}).get("message", "Unknown error")
             logger.error(f"Analytics API error {error_code}: {error_msg}")
             return None
@@ -645,7 +672,7 @@ class TikTokUploader:
             return None
 
         error_code = data.get("error", {}).get("code")
-        if error_code:
+        if error_code and error_code != "ok":
             error_msg = data.get("error", {}).get("message", "Unknown error")
             logger.error(f"Creator info API error {error_code}: {error_msg}")
             return None
@@ -695,7 +722,7 @@ class TikTokUploader:
             return []
 
         error_code = data.get("error", {}).get("code")
-        if error_code:
+        if error_code and error_code != "ok":
             error_msg = data.get("error", {}).get("message", "Unknown error")
             logger.error(f"List videos API error {error_code}: {error_msg}")
             return []

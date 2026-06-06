@@ -144,9 +144,9 @@ const stats = ref([
 ])
 
 const platforms = ref([
-  { name: 'YouTube', icon: Youtube, bgColor: 'bg-red-600', status: 'Connected', connected: true },
-  { name: 'TikTok', icon: Music2, bgColor: 'bg-black', status: 'Connected', connected: true },
-  { name: 'Printer', icon: Printer, bgColor: 'bg-primary', status: 'Online', connected: true }
+  { name: 'YouTube', icon: Youtube, bgColor: 'bg-red-600', status: 'Loading...', connected: false },
+  { name: 'TikTok', icon: Music2, bgColor: 'bg-black', status: 'Loading...', connected: false },
+  { name: 'Printer', icon: Printer, bgColor: 'bg-primary', status: 'Loading...', connected: false }
 ])
 
 const recentActivity = ref([
@@ -162,15 +162,37 @@ const syncFromPrinter = async () => {
 
 onMounted(async () => {
   try {
-    const response = await api.get('/stats/dashboard')
-    const data = response.data
+    const [statsResponse, settingsResponse, printersResponse] = await Promise.all([
+      api.get('/stats/dashboard'),
+      api.get('/settings'),
+      api.get('/printers')
+    ])
     
+    const data = statsResponse.data
     stats.value[0].value = data.total_videos?.toString() || '0'
     stats.value[1].value = data.pending_uploads?.toString() || '0'
     stats.value[2].value = data.published?.toString() || '0'
     stats.value[3].value = data.total_views?.toLocaleString() || '0'
+    
+    // Update platform statuses from settings
+    const settings = settingsResponse.data
+    platforms.value[0].connected = settings.youtube_connected || false
+    platforms.value[0].status = settings.youtube_connected 
+      ? (settings.youtube_email || 'Connected') 
+      : 'Not connected'
+    
+    platforms.value[1].connected = settings.tiktok_connected || false
+    platforms.value[1].status = settings.tiktok_connected ? 'Connected' : 'Not connected'
+    
+    // Update printer status
+    const printers = printersResponse.data || []
+    const hasPrinters = printers.length > 0
+    platforms.value[2].connected = hasPrinters
+    platforms.value[2].status = hasPrinters 
+      ? `${printers.length} printer(s) configured` 
+      : 'No printers configured'
   } catch (err) {
-    console.error('Failed to load dashboard stats:', err)
+    console.error('Failed to load dashboard data:', err)
   }
 })
 </script>

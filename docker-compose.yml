@@ -1,12 +1,10 @@
 version: "3.8"
 
 services:
-  vms:
+  api:
     build:
-      context: .
+      context: ./video_management
       dockerfile: Dockerfile
-    container_name: video-management-system
-    restart: unless-stopped
     ports:
       - "8000:8000"
     environment:
@@ -23,24 +21,21 @@ services:
       - OUTPUT_RESOLUTION=1080x1920
       - HOST=0.0.0.0
       - PORT=8000
-      - ANALYTICS_SYNC_HOUR=0
-      - ANALYTICS_SYNC_MINUTE=0
-      # Security (IMPORTANT for public servers!)
       - ALLOW_REGISTRATION=${ALLOW_REGISTRATION:-false}
       - ADMIN_USERNAME=${ADMIN_USERNAME:-}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
-      - MAX_LOGIN_ATTEMPTS=5
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
       - ./uploads:/app/uploads
-      # Mount your YouTube client secrets file (optional)
-      # - ./client_secrets.json:/app/client_secrets.json:ro
-    networks:
-      - vms-network
-    # If you need to access printers on your local network
-    # network_mode: host
 
-networks:
-  vms-network:
-    driver: bridge
+  ui:
+    build:
+      context: ./video_management/ui/vue
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api

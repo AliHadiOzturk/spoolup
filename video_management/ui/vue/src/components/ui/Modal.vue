@@ -15,7 +15,7 @@
       
       <!-- Modal content -->
       <div
-        class="relative bg-surface border border-border rounded-xl shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto"
+        :class="['relative bg-surface border border-border rounded-xl shadow-2xl w-full max-h-[90vh] overflow-y-auto', sizeClasses[size]]"
         @click.stop
       >
         <!-- Header -->
@@ -57,11 +57,19 @@ interface Props {
   modelValue: boolean
   title?: string
   closeOnBackdrop?: boolean
+  size?: 'sm' | 'md' | 'lg'
 }
 
 withDefaults(defineProps<Props>(), {
-  closeOnBackdrop: true
+  closeOnBackdrop: true,
+  size: 'md'
 })
+
+const sizeClasses = {
+  sm: 'max-w-sm',
+  md: 'max-w-lg',
+  lg: 'max-w-4xl'
+}
 
 defineEmits<{ 'update:modelValue': [value: boolean] }>()
 </script>
