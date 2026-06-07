@@ -8,7 +8,7 @@ from auth.security import decode_access_token
 
 logger = logging.getLogger(__name__)
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/v1/auth/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/token")
 
 # Default user getter - can be overridden
 def get_user_by_username(username: str) -> Optional[Any]:

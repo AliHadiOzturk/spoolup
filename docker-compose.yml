@@ -33,6 +33,8 @@ services:
       context: ./video_management/ui/vue
       dockerfile: Dockerfile
       args:
-        VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+        # Must include /api suffix - all backend routes are prefixed with /api
+        # Production example: https://api.spoolup.alihadiozturk.com/api
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8000/api}
     depends_on:
       - api
