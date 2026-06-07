@@ -1298,7 +1298,7 @@ async def sync_printer(
     
     try:
         client = MoonrakerClient(printer.moonraker_url, printer.api_key)
-        videos = client.list_timelapse_videos()
+        videos = await client.get_timelapse_files()
         
         synced_count = 0
         for video_data in videos:
@@ -1310,7 +1310,7 @@ async def sync_printer(
             if not existing:
                 video = Video(
                     printer_id=printer_id,
-                    filename=video_data["name"],
+                    filename=video_data["path"],
                     original_path=video_data["path"],
                     size_bytes=video_data.get("size", 0),
                     duration_seconds=video_data.get("duration", 0),
