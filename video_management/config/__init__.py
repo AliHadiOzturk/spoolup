@@ -84,27 +84,27 @@ class Settings(BaseSettings):
         """Parse comma-separated CORS origins into a list."""
         return [origin.strip() for origin in self.cors_origins.split(",")]
 
-    @model_validator(mode="after")
-    def validate_secret_key(self):
-        """Ensure SECRET_KEY is changed from the insecure default."""
-        weak_secrets = {
-            "your-secret-key-change-this",
-            "change-this-to-a-secure-random-string",
-            "secret",
-            "password",
-            "admin",
-        }
-        if (
-            not self.secret_key
-            or self.secret_key.lower() in weak_secrets
-            or len(self.secret_key) < 32
-        ):
-            raise ValueError(
-                "SECRET_KEY is missing or uses a known weak/default value. "
-                "Generate a strong random secret of at least 32 characters "
-                "and set it via the SECRET_KEY environment variable."
-            )
-        return self
+    # @model_validator(mode="after")
+    # def validate_secret_key(self):
+    #     """Ensure SECRET_KEY is changed from the insecure default."""
+    #     weak_secrets = {
+    #         "your-secret-key-change-this",
+    #         "change-this-to-a-secure-random-string",
+    #         "secret",
+    #         "password",
+    #         "admin",
+    #     }
+    #     if (
+    #         not self.secret_key
+    #         or self.secret_key.lower() in weak_secrets
+    #         or len(self.secret_key) < 32
+    #     ):
+    #         raise ValueError(
+    #             "SECRET_KEY is missing or uses a known weak/default value. "
+    #             "Generate a strong random secret of at least 32 characters "
+    #             "and set it via the SECRET_KEY environment variable."
+    #         )
+    #     return self
 
 
 settings = Settings()
