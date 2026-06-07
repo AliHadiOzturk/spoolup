@@ -25,7 +25,7 @@
           <video
             controls
             class="w-full max-h-[480px] bg-black"
-            :src="`/api/videos/${video.id}/stream`"
+            :src="`${api.defaults.baseURL}/videos/${video.id}/stream`"
           >
             Your browser does not support the video tag.
           </video>
@@ -78,7 +78,7 @@
         
         <div class="pt-2">
           <a
-            :href="`/api/videos/${video.id}/stream`"
+            :href="`${api.defaults.baseURL}/videos/${video.id}/stream`"
             target="_blank"
             class="flex items-center justify-center gap-2 w-full px-4 py-2 bg-surface-elevated hover:bg-surface text-text-primary rounded-lg transition-colors text-sm"
           >

@@ -4,7 +4,7 @@
       <!-- Thumbnail -->
       <img
         v-if="video.id && !thumbnailError"
-        :src="`/api/videos/${video.id}/thumbnail`"
+        :src="`${api.defaults.baseURL}/videos/${video.id}/thumbnail`"
         :alt="video.filename"
         class="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
         loading="lazy"
@@ -85,6 +85,7 @@ import { ref } from 'vue'
 import { Film, Play, Eye } from 'lucide-vue-next'
 import Card from '../ui/Card.vue'
 import Badge from '../ui/Badge.vue'
+import api from '@/composables/useApi'
 import type { Video } from '@/stores/videos'
 
 const thumbnailError = ref(false)
