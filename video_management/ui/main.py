@@ -623,6 +623,8 @@ async def get_video(
         "created_at": video.created_at,
         "modified_at": video.modified_at,
         "moonraker_metadata_json": video.moonraker_metadata_json,
+        "original_path": video.original_path,
+        "thumbnail_path": video.thumbnail_path,
         "processed_videos": processed,
         "uploads": all_uploads,
     }
