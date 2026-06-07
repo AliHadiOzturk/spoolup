@@ -17,7 +17,7 @@ from fastapi import (
     status,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -628,6 +628,109 @@ async def get_video(
         "processed_videos": processed,
         "uploads": all_uploads,
     }
+
+
+@app.get("/api/videos/{video_id}/stream")
+async def stream_video(
+    video_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Stream video directly from the printer via Moonraker proxy."""
+    import httpx
+    
+    video = db.query(Video).filter(Video.id == video_id).first()
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+    
+    printer = db.query(Printer).filter(Printer.id == video.printer_id).first()
+    if not printer:
+        raise HTTPException(status_code=404, detail="Printer not found")
+    
+    # Construct Moonraker URL for the timelapse file
+    filename = video.original_path
+    moonraker_url = f"{printer.moonraker_url}/server/files/timelapse/{filename}"
+    
+    try:
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            # Forward range header for video seeking support
+            headers = {}
+            range_header = request.headers.get("range")
+            if range_header:
+                headers["Range"] = range_header
+            
+            response = await client.get(
+                moonraker_url,
+                headers=headers,
+                follow_redirects=True
+            )
+            
+            if response.status_code not in (200, 206):
+                logger.error(f"Moonraker returned {response.status_code} for {moonraker_url}")
+                raise HTTPException(
+                    status_code=404, 
+                    detail="Video not found on printer"
+                )
+            
+            # Build response headers
+            response_headers = {
+                "Content-Type": response.headers.get("content-type", "video/mp4"),
+                "Accept-Ranges": "bytes",
+            }
+            
+            if "content-length" in response.headers:
+                response_headers["Content-Length"] = response.headers["content-length"]
+            if "content-range" in response.headers:
+                response_headers["Content-Range"] = response.headers["content-range"]
+            
+            return StreamingResponse(
+                response.aiter_bytes(chunk_size=8192),
+                status_code=response.status_code,
+                headers=response_headers,
+            )
+    except httpx.RequestError as exc:
+        logger.error(f"Failed to stream video from Moonraker: {exc}")
+        raise HTTPException(status_code=502, detail="Failed to connect to printer")
+
+
+@app.get("/api/videos/{video_id}/thumbnail")
+async def get_video_thumbnail(
+    video_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Get video thumbnail from the printer via Moonraker proxy."""
+    import httpx
+    
+    video = db.query(Video).filter(Video.id == video_id).first()
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+    
+    printer = db.query(Printer).filter(Printer.id == video.printer_id).first()
+    if not printer:
+        raise HTTPException(status_code=404, detail="Printer not found")
+    
+    # Try common thumbnail extensions
+    base_name = video.original_path.rsplit(".", 1)[0]
+    extensions = [".jpg", ".jpeg", ".png"]
+    
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for ext in extensions:
+            thumbnail_url = f"{printer.moonraker_url}/server/files/timelapse/{base_name}{ext}"
+            try:
+                response = await client.get(thumbnail_url, follow_redirects=True)
+                if response.status_code == 200:
+                    return StreamingResponse(
+                        response.aiter_bytes(),
+                        media_type=response.headers.get("content-type", f"image/{ext.lstrip('.')}"),
+                        headers={"Cache-Control": "public, max-age=3600"},
+                    )
+            except httpx.RequestError:
+                continue
+    
+    # No thumbnail found
+    raise HTTPException(status_code=404, detail="Thumbnail not found")
 
 
 @app.put("/api/videos/{video_id}/metadata", response_model=VideoResponse)
