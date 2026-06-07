@@ -2,6 +2,7 @@
 
 import logging
 import os
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -43,6 +44,7 @@ from database.models import (
     Printer,
     ProcessedVideo,
     Upload,
+    UploadJob,
     User,
     Video,
     VideoAnalytics,
@@ -115,6 +117,58 @@ def _get_pkce_verifier(state: str) -> Optional[str]:
 
 
 # =============================================================================
+# Login attempt tracking (account lockout)
+# =============================================================================
+
+_LOGIN_ATTEMPT_WINDOW_SECONDS = 15 * 60
+_login_attempts: Dict[str, List[float]] = {}
+
+
+def _is_login_blocked(key: str, max_attempts: int) -> bool:
+    """Check if a username/IP has exceeded failed login attempts."""
+    now = time.time()
+    attempts = _login_attempts.get(key, [])
+    attempts = [t for t in attempts if now - t < _LOGIN_ATTEMPT_WINDOW_SECONDS]
+    _login_attempts[key] = attempts
+    return len(attempts) >= max_attempts
+
+
+def _record_failed_login(key: str) -> None:
+    """Record a failed login attempt."""
+    now = time.time()
+    attempts = _login_attempts.get(key, [])
+    attempts.append(now)
+    _login_attempts[key] = attempts
+
+
+def _clear_login_attempts(key: str) -> None:
+    """Clear failed login attempts after successful login."""
+    _login_attempts.pop(key, None)
+
+
+# =============================================================================
+# Safe path helper (prevent path traversal)
+# =============================================================================
+
+
+def _safe_path(base_dir: Path, target: str) -> Optional[Path]:
+    """Resolve target relative to base_dir and ensure it stays within base_dir."""
+    try:
+        base = base_dir.resolve()
+        target_path = Path(target)
+        if not target_path.is_absolute():
+            target_path = base / target_path
+        resolved = target_path.resolve()
+        base_str = str(base)
+        resolved_str = str(resolved)
+        if resolved_str == base_str or resolved_str.startswith(base_str + os.sep):
+            return resolved
+    except (ValueError, OSError, RuntimeError):
+        pass
+    return None
+
+
+# =============================================================================
 # Pydantic Schemas
 # =============================================================================
 
@@ -129,7 +183,7 @@ class TokenData(BaseModel):
 
 class UserCreate(BaseModel):
     username: str = Field(..., min_length=3, max_length=50)
-    password: str = Field(..., min_length=6)
+    password: str = Field(..., min_length=8)
     email: Optional[str] = None
 
 
@@ -280,6 +334,12 @@ class PrinterResponse(BaseModel):
         from_attributes = True
 
 
+class PrinterCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    moonraker_url: str = Field(..., min_length=1, max_length=255)
+    api_key: Optional[str] = Field(None, max_length=255)
+
+
 class UploadResponse(BaseModel):
     id: int
     platform: str
@@ -329,7 +389,10 @@ VUE_DIST_DIR = BASE_DIR / "vue" / "dist"
 app = FastAPI(
     title="Video Management System",
     description="API for managing and uploading 3D printer timelapse videos",
-    version="2.0.0"
+    version="2.0.0",
+    docs_url="/docs" if settings.debug else None,
+    redoc_url="/redoc" if settings.debug else None,
+    openapi_url="/openapi.json" if settings.debug else None,
 )
 
 # Security headers middleware
@@ -363,18 +426,7 @@ async def serve_spa():
     index_path = VUE_DIST_DIR / "index.html"
     if index_path.exists():
         return FileResponse(index_path)
-    return HTMLResponse(
-        content="""
-        <!DOCTYPE html>
-        <html>
-        <head><title>VMS</title></head>
-        <body>
-            <h1>Video Management System</h1>
-            <p>Vue frontend is not built yet. Run `npm run build` in the vue directory.</p>
-        </body>
-        </html>
-        """
-    )
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
 
 # Mount static files from Vue dist
@@ -397,21 +449,34 @@ async def login(
     db: Session = Depends(get_db)
 ):
     """Authenticate user and return JWT token."""
+    client_ip = request.client.host if request.client else "unknown"
+    attempt_key = f"{client_ip}:{form_data.username}"
+
+    if _is_login_blocked(attempt_key, settings.max_login_attempts):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed login attempts. Please try again later.",
+        )
+
     user = get_user_by_username(db, form_data.username)
     if user is None:
+        _record_failed_login(attempt_key)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
     if not authenticate_user(form_data.username, form_data.password, lambda _: user):
+        _record_failed_login(attempt_key)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
+    _clear_login_attempts(attempt_key)
+
     access_token_expires = timedelta(minutes=30)
     access_token = create_access_token(
         data={"sub": user.username},
@@ -798,8 +863,9 @@ async def delete_processed_video_endpoint(
     
     # Delete the file from disk
     try:
-        if os.path.exists(processed.processed_path):
-            os.remove(processed.processed_path)
+        safe_path = _safe_path(BASE_DIR.parent, processed.processed_path)
+        if safe_path and safe_path.exists():
+            os.remove(safe_path)
     except OSError as e:
         logger.error(f"Failed to delete processed video file: {e}")
     
@@ -827,13 +893,14 @@ async def download_processed_video(
     if not processed:
         raise HTTPException(status_code=404, detail="Processed video not found")
     
-    if not os.path.exists(processed.processed_path):
+    safe_path = _safe_path(BASE_DIR.parent, processed.processed_path)
+    if not safe_path or not safe_path.is_file():
         raise HTTPException(status_code=404, detail="Video file not found on disk")
-    
+
     return FileResponse(
-        processed.processed_path,
+        safe_path,
         media_type="video/mp4",
-        filename=os.path.basename(processed.processed_path)
+        filename=safe_path.name
     )
 
 
@@ -1152,6 +1219,70 @@ async def list_printers(
     """List all configured printers."""
     printers = db.query(Printer).all()
     return printers
+
+
+@app.post("/api/printers", response_model=PrinterResponse, status_code=status.HTTP_201_CREATED)
+async def create_printer_route(
+    printer_data: PrinterCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Create a new printer."""
+    printer = Printer(
+        name=printer_data.name,
+        moonraker_url=printer_data.moonraker_url,
+        api_key=printer_data.api_key,
+        is_active=True,
+    )
+    db.add(printer)
+    db.commit()
+    db.refresh(printer)
+    logger.info(f"Created printer: {printer.name} (id={printer.id})")
+    return printer
+
+
+@app.delete("/api/printers/{printer_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_printer_route(
+    printer_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Delete a printer and all associated data."""
+    printer = db.query(Printer).filter(Printer.id == printer_id).first()
+    if not printer:
+        raise HTTPException(status_code=404, detail="Printer not found")
+
+    videos = db.query(Video).filter(Video.printer_id == printer_id).all()
+    for video in videos:
+        for processed in list(video.processed_videos):
+            for upload in list(processed.uploads):
+                for analytics in list(upload.analytics):
+                    db.delete(analytics)
+                db.query(UploadJob).filter(UploadJob.upload_id == upload.id).delete(
+                    synchronize_session=False
+                )
+                db.delete(upload)
+            for overlay in list(processed.text_overlays):
+                db.delete(overlay)
+            for va in list(processed.video_audios):
+                db.delete(va)
+            safe_path = _safe_path(BASE_DIR.parent, processed.processed_path)
+            if safe_path and safe_path.exists():
+                try:
+                    os.remove(safe_path)
+                except OSError as e:
+                    logger.error(f"Failed to delete processed video file: {e}")
+            db.delete(processed)
+        db.delete(video)
+
+    zip_archives = db.query(ZipArchive).filter(ZipArchive.printer_id == printer_id).all()
+    for z in zip_archives:
+        db.delete(z)
+
+    db.delete(printer)
+    db.commit()
+    logger.info(f"Deleted printer: id={printer_id}")
+    return None
 
 
 @app.post("/api/printers/{printer_id}/sync", response_model=SyncResponse)
@@ -1518,17 +1649,17 @@ async def serve_spa_routes(path: str):
     # Skip API routes
     if path.startswith("api/") or path.startswith("static/"):
         raise HTTPException(status_code=404)
-    
-    # Try to serve static files first
-    file_path = VUE_DIST_DIR / path
-    if file_path.exists() and file_path.is_file():
-        return FileResponse(file_path)
-    
+
+    # Try to serve static files first (prevent path traversal)
+    safe_file_path = _safe_path(VUE_DIST_DIR, path)
+    if safe_file_path and safe_file_path.is_file():
+        return FileResponse(safe_file_path)
+
     # Fall back to index.html for client-side routing
     index_path = VUE_DIST_DIR / "index.html"
     if index_path.exists():
         return FileResponse(index_path)
-    
+
     raise HTTPException(status_code=404)
 
 

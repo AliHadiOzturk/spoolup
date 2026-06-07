@@ -145,6 +145,7 @@ class TikTokUploader:
 
             with open(self.token_path, "w") as f:
                 json.dump(token_data, f, indent=2)
+            os.chmod(self.token_path, 0o600)
 
             logger.info(f"Token saved to {self.token_path}")
 
