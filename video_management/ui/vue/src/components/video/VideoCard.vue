@@ -4,7 +4,7 @@
       <!-- Thumbnail -->
       <img
         v-if="video.id && !thumbnailError"
-        :src="`${api.defaults.baseURL}/videos/${video.id}/thumbnail`"
+        :src="thumbnailUrl"
         :alt="video.filename"
         class="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
         loading="lazy"
@@ -81,7 +81,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { Film, Play, Eye } from 'lucide-vue-next'
 import Card from '../ui/Card.vue'
 import Badge from '../ui/Badge.vue'
@@ -90,15 +90,16 @@ import type { Video } from '@/stores/videos'
 
 const thumbnailError = ref(false)
 
-interface Props {
+const props = defineProps<{
   video: Video
   selectable?: boolean
   selected?: boolean
-}
+}>()
 
-withDefaults(defineProps<Props>(), {
-  selectable: false,
-  selected: false
+const thumbnailUrl = computed(() => {
+  const token = localStorage.getItem('access_token') || ''
+  const baseUrl = api.defaults.baseURL || '/api'
+  return `${baseUrl}/videos/${props.video.id}/thumbnail?token=${token}`
 })
 
 defineEmits<{

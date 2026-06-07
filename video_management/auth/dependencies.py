@@ -1,14 +1,33 @@
 import logging
 from typing import Optional, Any
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 
 from auth.security import decode_access_token
 
 logger = logging.getLogger(__name__)
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/token")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/token", auto_error=False)
+
+async def get_token_from_request(
+    request: Request,
+    token: Optional[str] = Depends(oauth2_scheme),
+) -> Optional[str]:
+    """Extract token from Authorization header or query parameter.
+    
+    Supports both Bearer token in header and ?token= query param
+    for use cases like video streaming where headers can't be set.
+    """
+    if token:
+        return token
+    
+    # Check query parameter for token (used by video/img tags)
+    query_token = request.query_params.get("token")
+    if query_token:
+        return query_token
+    
+    return None
 
 # Default user getter - can be overridden
 def get_user_by_username(username: str) -> Optional[Any]:
@@ -36,7 +55,7 @@ def override_get_user(func):
 
 
 async def get_current_user(
-    token: str = Depends(oauth2_scheme),
+    token: Optional[str] = Depends(get_token_from_request),
 ) -> Any:
     """Validate JWT token and return current user.
     
@@ -54,6 +73,10 @@ async def get_current_user(
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    
+    if token is None:
+        logger.warning("No token provided in request")
+        raise credentials_exception
     
     payload = decode_access_token(token)
     if payload is None:

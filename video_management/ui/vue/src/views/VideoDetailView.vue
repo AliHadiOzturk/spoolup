@@ -25,7 +25,7 @@
           <video
             controls
             class="w-full max-h-[480px] bg-black"
-            :src="`${api.defaults.baseURL}/videos/${video.id}/stream`"
+            :src="streamUrl"
           >
             Your browser does not support the video tag.
           </video>
@@ -78,7 +78,7 @@
         
         <div class="pt-2">
           <a
-            :href="`${api.defaults.baseURL}/videos/${video.id}/stream`"
+            :href="streamUrl"
             target="_blank"
             class="flex items-center justify-center gap-2 w-full px-4 py-2 bg-surface-elevated hover:bg-surface text-text-primary rounded-lg transition-colors text-sm"
           >
@@ -761,6 +761,13 @@ import Modal from '@/components/ui/Modal.vue'
 import api from '@/composables/useApi'
 
 const route = useRoute()
+
+const streamUrl = computed(() => {
+  if (!video.value) return ''
+  const token = localStorage.getItem('access_token') || ''
+  const baseUrl = api.defaults.baseURL || '/api'
+  return `${baseUrl}/videos/${video.value.id}/stream?token=${token}`
+})
 
 const video = ref<any>(null)
 const processedVideos = ref<any[]>([])
