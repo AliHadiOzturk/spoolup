@@ -551,7 +551,7 @@ async def list_videos(
     
     # Apply sorting
     if sort_by == "date":
-        query = query.order_by(Video.modified_at.desc())
+        query = query.order_by(Video.created_at.desc())
     elif sort_by == "date_oldest":
         query = query.order_by(Video.created_at.asc())
     elif sort_by == "name":
