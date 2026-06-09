@@ -3,7 +3,7 @@
 import logging
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -551,9 +551,9 @@ async def list_videos(
     
     # Apply sorting
     if sort_by == "date":
-        query = query.order_by(Video.created_at.desc())
+        query = query.order_by(Video.modified_at.desc().nulls_last())
     elif sort_by == "date_oldest":
-        query = query.order_by(Video.created_at.asc())
+        query = query.order_by(Video.modified_at.asc().nulls_last())
     elif sort_by == "name":
         query = query.order_by(Video.filename.asc())
     elif sort_by == "name_desc":
@@ -1413,6 +1413,15 @@ async def sync_printer(
             ).first()
             
             if not existing:
+                # Parse modified timestamp from Moonraker (Unix timestamp as float)
+                modified_ts = video_data.get("modified")
+                modified_at = None
+                if modified_ts:
+                    try:
+                        modified_at = datetime.fromtimestamp(modified_ts, tz=timezone.utc)
+                    except (ValueError, TypeError, OSError):
+                        pass
+
                 video = Video(
                     printer_id=printer_id,
                     filename=video_data["path"],
@@ -1423,7 +1432,8 @@ async def sync_printer(
                     height=video_data.get("height", 0),
                     fps=video_data.get("fps", 0),
                     thumbnail_path=video_data.get("thumbnail"),
-                    metadata_status="pending"
+                    metadata_status="pending",
+                    modified_at=modified_at,
                 )
                 db.add(video)
                 synced_count += 1
