@@ -698,8 +698,10 @@ class YouTubeStreamer:
             # MJPEG format detection while keeping startup near-realtime.
             "-probesize", "1M",
             "-analyzeduration", "500K",
-            # Input thread queue: buffer frames to prevent starvation from bursty MJPEG
-            "-thread_queue_size", "512",
+            # Input thread queue: larger buffer to absorb webcam micro-stalls.
+            # Webcam deterministically stalls at ~frame 308 for ~9s; a deeper queue
+            # paired with output CFR pacing (below) keeps frames available during gaps.
+            "-thread_queue_size", "2048",
             # Use wallclock timestamps for network MJPEG (no inherent timestamps)
             "-use_wallclock_as_timestamps", "1",
             "-f", "mjpeg",
@@ -714,6 +716,11 @@ class YouTubeStreamer:
             "-map", "1:a",
             # Muxer queue: prevent blocking when audio/video sync is temporarily off
             "-max_muxing_queue_size", "1024",
+            # Output CFR pacing: prevents the encoder from draining the input queue
+            # faster than realtime (burst). Without this, the initial burst empties
+            # the buffer before the webcam's deterministic ~9s stall at frame 308,
+            # causing a complete output freeze (videoIngestionStarved).
+            "-fps_mode", "cfr",
             # Video encoding options
             *video_opts,
             # Audio encoding
