@@ -692,9 +692,12 @@ class YouTubeStreamer:
             "-stats",
             # Input flags: discard corrupt frames but allow buffering
             "-fflags", "+discardcorrupt",
-            # Increase stream analysis for better MJPEG detection on network streams
-            "-probesize", "32M",
-            "-analyzeduration", "5M",
+            # Minimal probing: large values (32M/5M) caused ~5s pre-read backlog,
+            # leading to a burst drain of the webcam buffer and a compensating
+            # 9-second input stall (videoIngestionStarved). 1M/500K is enough for
+            # MJPEG format detection while keeping startup near-realtime.
+            "-probesize", "1M",
+            "-analyzeduration", "500K",
             # Input thread queue: buffer frames to prevent starvation from bursty MJPEG
             "-thread_queue_size", "512",
             # Use wallclock timestamps for network MJPEG (no inherent timestamps)
