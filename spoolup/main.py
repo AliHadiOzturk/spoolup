@@ -689,6 +689,7 @@ class YouTubeStreamer:
             "ffmpeg",
             "-hide_banner",
             "-loglevel", "warning",
+            "-stats",
             # Input flags: discard corrupt frames but allow buffering
             "-fflags", "+discardcorrupt",
             # Increase stream analysis for better MJPEG detection on network streams
