@@ -3,15 +3,16 @@
     <div class="relative aspect-video bg-black rounded-t-xl overflow-hidden">
       <!-- Thumbnail -->
       <img
-        v-if="video.thumbnail_path"
-        :src="video.thumbnail_path"
+        v-if="video.id && !thumbnailError"
+        :src="thumbnailUrl"
         :alt="video.filename"
         class="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
         loading="lazy"
+        @error="thumbnailError = true"
       />
       <!-- Fallback -->
       <div
-        v-else
+        v-if="!video.id || thumbnailError"
         class="w-full h-full flex items-center justify-center bg-surface-elevated"
       >
         <Film class="w-12 h-12 text-text-muted" />
@@ -80,20 +81,25 @@
 </template>
 
 <script setup lang="ts">
+import { computed, ref } from 'vue'
 import { Film, Play, Eye } from 'lucide-vue-next'
 import Card from '../ui/Card.vue'
 import Badge from '../ui/Badge.vue'
+import api from '@/composables/useApi'
 import type { Video } from '@/stores/videos'
 
-interface Props {
+const thumbnailError = ref(false)
+
+const props = defineProps<{
   video: Video
   selectable?: boolean
   selected?: boolean
-}
+}>()
 
-withDefaults(defineProps<Props>(), {
-  selectable: false,
-  selected: false
+const thumbnailUrl = computed(() => {
+  const token = localStorage.getItem('access_token') || ''
+  const baseUrl = api.defaults.baseURL || '/api'
+  return `${baseUrl}/videos/${props.video.id}/thumbnail?token=${token}`
 })
 
 defineEmits<{

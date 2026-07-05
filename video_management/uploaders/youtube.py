@@ -217,6 +217,7 @@ class YouTubeUploader:
 
             with open(self.token_path, "w") as f:
                 f.write(self.credentials.to_json())
+            os.chmod(self.token_path, 0o600)
 
             logger.info(f"Token saved to {self.token_path}")
 

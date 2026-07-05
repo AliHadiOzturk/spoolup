@@ -708,7 +708,7 @@ class VideoProcessor:
             input_path: Path to input video file
             output_path: Path to output video file
             options: Processing options dict with keys:
-                - zoom_level: float, default 1.0 (1.0 = no zoom, 3.0 = max zoom)
+                - zoom_level: float, default 1.0 (1.0 = no zoom, 3.0 = max zoom, -1 = fit center with black bars)
                 - crop_mode: 'center' (default), 'left', 'right', 'smart'
                 - target_duration: max seconds (default 60)
                 - speed_factor: playback speed multiplier
@@ -760,7 +760,12 @@ class VideoProcessor:
         shorts_width = 1080
         shorts_height = 1920
         
-        if zoom_level == 0:
+        if zoom_level == -1:
+            # Fit Center: Scale to fit inside 9:16 frame with black bars (letterbox/pillarbox)
+            logger.info("Zoom=-1: Fit center mode, maintaining aspect ratio with black bars")
+            filters.append(f"scale={shorts_width}:{shorts_height}:force_original_aspect_ratio=decrease")
+            filters.append(f"pad={shorts_width}:{shorts_height}:(ow-iw)/2:(oh-ih)/2:black")
+        elif zoom_level == 0:
             # Zoom 0: Standard 9:16 conversion, fill the entire frame (no extra zoom)
             logger.info("Zoom=0: Standard 9:16 conversion, filling frame")
             if current_aspect > target_aspect:

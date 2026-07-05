@@ -165,6 +165,12 @@ class UploadWorker:
             f"duet={allow_duet}, stitch={allow_stitch}, tags={upload.tags})"
         )
 
+        # Extract content tags (hashtags)
+        content_tags = tags.get("tags", []) if isinstance(tags, dict) else []
+        
+        # Extract draft option (default to True for safety)
+        draft = tags.get("draft", True) if isinstance(tags, dict) else True
+
         # Upload video
         try:
             publish_id = self._tiktok_uploader.upload_video(
@@ -175,6 +181,8 @@ class UploadWorker:
                 allow_comments=allow_comments,
                 allow_duet=allow_duet,
                 allow_stitch=allow_stitch,
+                tags=content_tags,
+                draft=draft,
             )
         except TikTokAPIError as e:
             # Pass through detailed TikTok API errors

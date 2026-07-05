@@ -69,6 +69,10 @@ Thumbs.db
 .playwright-mcp/
 .plans/
 
+# Node.js / Vue.js
+node_modules/
+video_management/ui/vue/node_modules/
+
 # Cloudflare Workers
 worker/node_modules/
 worker/.wrangler/

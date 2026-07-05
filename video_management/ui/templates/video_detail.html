@@ -146,6 +146,7 @@
                     style="cursor: pointer;"
                     onchange="updateZoomLabel(this.value)"
                 >
+                    <option value="-1">Fit Center (Letterbox)</option>
                     <option value="0.1" selected>Zoom Out (0.1x)</option>
                     <option value="0.25">Zoom Out (0.25x)</option>
                     <option value="0.5">Zoom Out (0.5x)</option>
@@ -465,6 +466,10 @@
             
             <div style="display: flex; flex-direction: column; gap: 0.5rem;">
                 <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.875rem;">
+                    <input type="checkbox" id="tiktok-draft" checked style="width: 16px; height: 16px;">
+                    <span>Upload as Draft <span style="font-size: 0.75rem; color: var(--text-secondary);">(Recommended - allows editing)</span></span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.875rem;">
                     <input type="checkbox" id="tiktok-comments" checked style="width: 16px; height: 16px;">
                     <span>Allow Comments</span>
                 </label>
@@ -479,7 +484,7 @@
             </div>
             
             <div style="background: var(--background); padding: 0.75rem; border-radius: 8px; font-size: 0.8125rem; color: var(--text-secondary);">
-                <strong style="color: var(--text-primary);">Note:</strong> The upload will be queued and processed in the background. Check the Uploads page for status.
+                <strong style="color: var(--text-primary);">Note:</strong> <span id="tiktok-draft-note">Draft uploads go to your TikTok inbox for editing before publishing.</span> Check the Uploads page for status.
             </div>
             
             <div style="display: flex; gap: 0.75rem; margin-top: 0.5rem;">
@@ -632,6 +637,7 @@ window.saveMetadata = async () => {
 // Update zoom label based on selection
 function updateZoomLabel(value) {
     const labels = {
+        '-1': 'Fit Center (Letterbox)',
         '0.1': 'Zoom Out (0.1x)',
         '0.25': 'Zoom Out (0.25x)',
         '0.5': 'Zoom Out (0.5x)',
@@ -1092,6 +1098,19 @@ window.closeTiktokModal = () => {
     document.getElementById('tiktok-modal').style.display = 'none';
 };
 
+// Update draft note text when checkbox changes
+document.addEventListener('DOMContentLoaded', () => {
+    const draftCheckbox = document.getElementById('tiktok-draft');
+    const draftNote = document.getElementById('tiktok-draft-note');
+    if (draftCheckbox && draftNote) {
+        draftCheckbox.addEventListener('change', () => {
+            draftNote.textContent = draftCheckbox.checked 
+                ? 'Draft uploads go to your TikTok inbox for editing before publishing.' 
+                : 'Direct publish will post the video immediately without editing.';
+        });
+    }
+});
+
 window.confirmTiktokUpload = async () => {
     const statusEl = document.getElementById('processing-status');
     closeTiktokModal();
@@ -1118,6 +1137,7 @@ window.confirmTiktokUpload = async () => {
 
         // Get TikTok-specific options
         const privacyStatus = document.getElementById('tiktok-privacy').value;
+        const draft = document.getElementById('tiktok-draft').checked;
         const allowComments = document.getElementById('tiktok-comments').checked;
         const allowDuet = document.getElementById('tiktok-duet').checked;
         const allowStitch = document.getElementById('tiktok-stitch').checked;
@@ -1135,6 +1155,7 @@ window.confirmTiktokUpload = async () => {
                 description: description,
                 tags: tags.length > 0 ? tags : ['3DPrinting', 'Timelapse'],
                 privacy_status: privacyStatus,
+                draft: draft,
                 allow_comments: allowComments,
                 allow_duet: allowDuet,
                 allow_stitch: allowStitch,
