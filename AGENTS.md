@@ -1,11 +1,17 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-04-28 22:19:49 UTC
-**Commit:** f418cdd
+**Generated:** 2026-09-12
+**Commit:** 44f837f
 **Branch:** main
 
 ## OVERVIEW
-A Python application for Klipper-based 3D printers that streams live video to YouTube during prints and uploads timelapse videos when complete. Uses a split architecture: authentication on PC/Mac, runtime on printer.
+A multi-component project for Klipper-based 3D printers:
+
+- **`spoolup/`** — Printer-side runtime: streams live video to YouTube during prints and uploads timelapse videos when complete. Split architecture: authentication on PC/Mac (`spoolup_auth/`), runtime on printer.
+- **`video_management/`** — Self-contained FastAPI web app (VMS): discovers timelapses from Moonraker printers, processes them to 9:16 vertical, uploads to YouTube Shorts and TikTok, with analytics dashboard and midnight sync. See `video_management/README.md`.
+- **`landing/`** — Static marketing site (plain HTML/CSS/JS), deployed to Cloudflare Workers via root `wrangler.jsonc`. See `landing/README.md`.
+
+Reference docs for external APIs live in `docs/` (index: `docs/api-integration-index.md`).
 
 ## Build/Test/Lint Commands
 
@@ -34,6 +40,15 @@ ruff check --fix spoolup/ spoolup_auth/
 
 # Type check with mypy (optional)
 mypy spoolup/ spoolup_auth/
+
+# Video Management System (from video_management/, needs its own venv)
+cd video_management && ./setup.sh        # create venv, install deps, init DB
+source venv/bin/activate && python main.py
+find . -name "*.py" -not -path "./venv/*" | xargs python -m py_compile  # syntax check
+
+# Landing site (static, no build)
+python -m http.server 8080 -d landing    # local preview
+npx wrangler deploy                      # deploy to Cloudflare
 ```
 
 **Note:** This project uses a custom `test_setup.py` script for verification. It does not use pytest or unittest. Individual test functions cannot be run separately - run the entire script.
@@ -121,6 +136,24 @@ mypy spoolup/ spoolup_auth/
 - **Split design**: Auth on PC/Mac, runtime on printer
 - Runtime loads token from `youtube_token.json` (no OAuth flow on printer)
 - Saves ~50MB by not installing OAuth libraries on embedded systems
+
+### Repository Layout
+- `spoolup/`, `spoolup_auth/` — printer runtime + PC/Mac auth tool (see `spoolup/AGENTS.md`)
+- `video_management/` — self-contained FastAPI VMS with its own venv, SQLite DB, and Alembic migrations (see `video_management/README.md`)
+- `landing/` — static marketing site served as Cloudflare Workers assets (see `landing/README.md`)
+- `docs/` — external API references (YouTube, TikTok, Moonraker), Docker guides, short-form video standards
+- `install.sh` — main interactive installer (box-drawn UI, auto-detects OS)
+- `install_k1.sh`, `install_generic.sh`, `install_universal.py`/`install_universal.sh` — platform-specific/universal installer variants
+- `manage_service.py`/`manage_service.sh` — universal service manager (systemd/init.d on Linux, launchd on macOS, schtasks on Windows)
+- `spoolup.service`, `docker-compose.yml`, `DOCKER_IMPLEMENTATION.md` — systemd unit and Docker deployment for the VMS
+
+### Video Management System (VMS)
+- Self-contained: everything runs inside `video_management/` with its own `venv/`
+- FastAPI + Jinja2 UI, SQLite via SQLAlchemy, JWT auth, Alembic migrations
+- Upload pipeline: `upload_queue/` (manager, worker, scheduler) with retry/cancel
+- Post-processing: `post_processing/` (audio mixer, editor, filters, text overlays)
+- Security: login rate limiting, security headers middleware, `ALLOW_REGISTRATION=false` default, audit log — see `SECURITY.md`
+- Video streaming proxy (`/api/videos/{id}/stream`, `/api/videos/{id}/thumbnail`) supports token in query params for `<video>`/`<img>` tags
 
 ### Installation
 - New installer: `git clone` then `sh install.sh` (interactive, box-drawn UI)

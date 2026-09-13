@@ -6,10 +6,14 @@ A self-contained web-based video management system for 3D printer timelapse vide
 
 - **Video Discovery**: Automatically discovers timelapse videos from Moonraker-based 3D printers
 - **Video Processing**: Converts 16:9 raw footage to 9:16 vertical format for short-form platforms using FFmpeg
+- **Post-Processing**: Audio mixing, text overlays, and filters (`post_processing/`)
 - **Multi-Platform Upload**: Uploads to YouTube Shorts and TikTok using official APIs
+- **Upload Queue**: Background worker with retry, cancel, and scheduled uploads (`upload_queue/`)
 - **Analytics Dashboard**: Tracks views, likes, comments, and shares with midnight sync
 - **Multiple Printer Support**: Manage multiple printers from a single interface
+- **Video Streaming Proxy**: Stream printer-hosted videos and thumbnails through the VMS (`/api/videos/{id}/stream`, `/api/videos/{id}/thumbnail`)
 - **Web Interface**: Modern dashboard for managing videos, uploads, and analytics
+- **Security Hardening**: JWT auth, login rate limiting, security headers, audit log (see `../SECURITY.md`)
 
 ## Architecture
 
@@ -95,22 +99,37 @@ video_management/
 ├── setup.sh               # Setup script
 ├── requirements.txt       # Dependencies
 ├── .env.example           # Configuration template
+├── Dockerfile             # Container image (see ../docs/docker-setup.md)
 ├── config/                # Configuration
 │   └── __init__.py       # Settings management
 ├── database/              # Database layer
 │   ├── __init__.py       # Engine, session, init
 │   ├── models.py         # SQLAlchemy models
 │   └── crud.py           # CRUD operations
+├── migrations/            # Alembic database migrations
+│   ├── alembic.ini
+│   ├── env.py
+│   └── versions/
 ├── auth/                  # Authentication
 │   ├── __init__.py
 │   ├── security.py       # Password hashing, JWT
-│   └── dependencies.py   # FastAPI auth deps
+│   ├── dependencies.py   # FastAPI auth deps
+│   └── rate_limiter.py   # Login rate limiting, security headers
 ├── api/                   # External API clients
 │   ├── __init__.py
 │   └── moonraker.py      # Moonraker printer API
 ├── video_processing/      # FFmpeg video processing
 │   ├── __init__.py
 │   └── processor.py      # Video conversion
+├── post_processing/       # Post-processing pipeline
+│   ├── audio_mixer.py    # Audio track mixing
+│   ├── editor.py         # Video editing operations
+│   ├── filters.py        # Video filters
+│   └── text_overlay.py   # Text overlays
+├── upload_queue/          # Background upload pipeline
+│   ├── manager.py        # Queue management (enqueue, retry, cancel)
+│   ├── worker.py         # Background upload worker
+│   └── scheduler.py      # Scheduled uploads
 ├── uploaders/             # Platform uploaders
 │   ├── __init__.py
 │   ├── youtube.py        # YouTube Data API v3
@@ -118,7 +137,11 @@ video_management/
 ├── analytics/             # Analytics collection
 │   ├── __init__.py
 │   └── collector.py      # Metrics sync
-├── scheduler.py           # Midnight sync scheduler
+├── utils/                 # Shared utilities
+│   ├── logging_config.py
+│   ├── performance.py
+│   └── validators.py
+├── scheduler.py           # Midnight analytics sync scheduler
 └── ui/                    # Web application
     ├── main.py           # FastAPI routes
     ├── static/           # CSS, JS, images
@@ -137,21 +160,38 @@ video_management/
 
 ## API Endpoints
 
+### System
+- `GET /health` - Health check (no auth)
+
 ### Authentication
-- `POST /auth/register` - Register new user
-- `POST /auth/login` - Login and get JWT token
+- `POST /api/auth/token` - Login and get JWT token
+- `POST /api/auth/register` - Register new user (requires `ALLOW_REGISTRATION=true`)
+- `GET /api/auth/me` - Get current user
 
 ### Videos
 - `GET /api/videos` - List all videos
 - `GET /api/videos/{id}` - Get video details
+- `GET /api/videos/{id}/stream` - Stream video (proxied from printer; accepts `?token=` for `<video>` tags)
+- `GET /api/videos/{id}/thumbnail` - Get video thumbnail (accepts `?token=` for `<img>` tags)
+- `PUT /api/videos/{id}/metadata` - Update video metadata
 - `POST /api/videos/{id}/process` - Process video for shorts
 - `GET /api/videos/{id}/processed` - List processed versions
+- `GET /api/videos/{id}/processed/{processed_id}/download` - Download processed video
+- `DELETE /api/videos/{id}/processed/{processed_id}` - Delete processed video
+- `GET /api/videos/{id}/uploads` - List uploads for a video
 
 ### Uploads
 - `POST /api/uploads/youtube/{processed_id}` - Upload to YouTube
 - `POST /api/uploads/tiktok/{processed_id}` - Upload to TikTok
 - `GET /api/uploads` - List all uploads
-- `GET /api/uploads/{id}/status` - Check upload status
+- `GET /api/uploads/{id}` - Get upload status/details
+- `POST /api/uploads/{id}/retry` - Retry a failed upload
+- `POST /api/uploads/{id}/cancel` - Cancel a queued upload
+
+### Audio
+- `GET /api/audio` - List audio tracks
+- `POST /api/audio` - Add audio track
+- `DELETE /api/audio/{track_id}` - Delete audio track
 
 ### Analytics
 - `GET /api/analytics` - Get analytics dashboard data
@@ -182,6 +222,17 @@ Options:
 Analytics are automatically synced every midnight via APScheduler:
 - YouTube: Views, likes, comments, favorites
 - TikTok: Views, likes, comments, shares
+
+## Security
+
+The VMS ships with production-oriented protections (see `../SECURITY.md` for the full policy):
+
+- **JWT auth** on all `/api/*` endpoints
+- **Login rate limiting** — `MAX_LOGIN_ATTEMPTS` (default 5) failed attempts within 15 minutes
+- **Security headers** middleware on every response
+- **Registration lockdown** — `ALLOW_REGISTRATION=false` by default; use `ADMIN_USERNAME` + `ADMIN_PASSWORD` to auto-create an admin on first startup instead
+- **Audit log** of sensitive actions (`AuditLog` table)
+- **Query-param tokens** (`?token=`) are only honored by the stream/thumbnail endpoints for use in `<video>`/`<img>` tags
 
 ## Requirements
 
