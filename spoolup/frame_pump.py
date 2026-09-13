@@ -112,6 +112,13 @@ class FramePump:
         self._reader_thread: Optional[threading.Thread] = None
         self._pacer_thread: Optional[threading.Thread] = None
         self._response = None
+        # 10s-interval diagnostics (frames in/out, drops, buffer depth)
+        self._stats_frames_read = 0
+        self._stats_bytes_read = 0
+        self._stats_frames_stale_dropped = 0  # overwritten by deque overflow
+        self._stats_frames_paced = 0
+        self._stats_frames_starved = 0  # pacer ticks with nothing new (dup)
+        self._stats_lock = threading.Lock()
 
     def start(self) -> None:
         self._reader_thread = threading.Thread(
@@ -136,6 +143,7 @@ class FramePump:
             target=self._pacer_loop, args=(pipe_fd,), daemon=True
         )
         self._pacer_thread.start()
+        self._start_stats_loop()
 
     def stop(self) -> None:
         self._stop.set()
@@ -148,17 +156,48 @@ class FramePump:
             if t and t.is_alive():
                 t.join(timeout=5)
 
+    # ---- diagnostics ---------------------------------------------------
+    def _start_stats_loop(self) -> None:
+        def stats_loop():
+            prev_in = prev_out = 0
+            while not self._stop.wait(10.0):
+                with self._stats_lock:
+                    read = self._stats_frames_read
+                    bytes_read = self._stats_bytes_read
+                    paced = self._stats_frames_paced
+                    stale = self._stats_frames_stale_dropped
+                    starved = self._stats_frames_starved
+                logger.info(
+                    "FramePump stats 10s: read=%d (%.1f/s, %.1f KB/s) "
+                    "paced=%d (%.1f/s) buffer=%d stale_drop=%.1f/s "
+                    "dup_ticks=%.1f/s",
+                    read - prev_in, (read - prev_in) / 10.0,
+                    bytes_read / 10240.0,
+                    paced - prev_out, (paced - prev_out) / 10.0,
+                    len(self._buffer), stale / 10.0, starved / 10.0,
+                )
+                prev_in, prev_out = read, paced
+
+        threading.Thread(target=stats_loop, daemon=True).start()
+
     # ---- internals (also unit-test entry points) ----------------------
     def _push_frame(self, frame: bytes) -> None:
         with self._lock:
+            if self._buffer.maxlen and len(self._buffer) >= self._buffer.maxlen:
+                with self._stats_lock:
+                    self._stats_frames_stale_dropped += 1
             self._buffer.append(frame)  # deque maxlen drops-oldest
             self._last = frame
+        with self._stats_lock:
+            self._stats_frames_read += 1
 
-    def _next_frame(self) -> Optional[bytes]:
+    def _next_frame(self):
+        """Pop the next frame; returns (frame_or_None, was_fresh)."""
         with self._lock:
             if self._buffer:
                 self._last = self._buffer.popleft()
-            return self._last
+                return self._last, True
+            return self._last, False
 
     def _reader_loop(self) -> None:
         backoff = 1.0
@@ -181,6 +220,8 @@ class FramePump:
                     chunk = next(gen)
                     if not chunk:
                         continue
+                    with self._stats_lock:
+                        self._stats_bytes_read += len(chunk)
                     for frame in parser.feed(chunk):
                         self._push_frame(frame)
             except StopIteration:
@@ -207,10 +248,14 @@ class FramePump:
                 self._stop.wait(wait)
                 if self._stop.is_set():
                     break
-            frame = self._next_frame()
+            frame, fresh = self._next_frame()
             if frame is None:
                 next_tick = time.time() + self._interval
                 continue
+            with self._stats_lock:
+                self._stats_frames_paced += 1
+                if not fresh:
+                    self._stats_frames_starved += 1
             try:
                 os.write(pipe_fd, frame)
             except (BrokenPipeError, OSError):
