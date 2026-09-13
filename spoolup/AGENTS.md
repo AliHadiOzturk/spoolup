@@ -1,50 +1,57 @@
-# SPOOLUP RUNTIME KNOWLEDGE BASE
+# spoolup runtime knowledge base
 
-**Scope:** Printer-side streaming daemon (runs on embedded Linux)
+**Scope** Streaming-machine runtime (PC/Mac/Linux; NOT the printer — printer SoCs cannot sustain live encoding)
 
-## OVERVIEW
-Monolithic Python runtime that connects to Moonraker (Klipper), streams webcam MJPEG via FFmpeg to YouTube Live RTMP, and uploads timelapse videos on print completion.
+## overview
+Monolith Python runtime that connects to Moonraker (Klipper) over the network, streams a buffered webcam MJPEG via a single FFmpeg `tee` to YouTube Live RTMP AND Kick (rtmp/srt), and uploads timelapse videos on print completion.
 
-## STRUCTURE
+## structure
 
 ```
 spoolup/
 ├── __init__.py    # Exports main()
 ├── __main__.py    # python -m spoolup entry point
-└── main.py        # 1940-line monolith (all runtime logic)
+├── frame_pump.py  # Buffered MJPEG reader/pacer (webcam → ffmpeg stdin pipe)
+└── main.py        # ~2200-line monolith (StreamManager, config, moonraker, uploader)
 ```
 
-## WHERE TO LOOK
+## where to look
 
 | Task | Location | Notes |
 |------|----------|-------|
-| Config loading | `main.py:Config` class | JSON with DEFAULTS dict |
+| Config loading | `main.py:Config` | JSON with DEFAULTS dict |
 | Moonraker WS | `main.py:MoonrakerClient` | WebSocketApp callbacks + REST |
-| Stream control | `main.py:YouTubeStreamer` | FFmpeg subprocess mgmt |
-| State machine | `main.py` | print_state → stream actions |
-| Timelapse upload | `main.py` | Finds newest .mp4 in timelapse dir |
+| Stream control | `main.py:StreamManager` | ffmpeg tee pipeline mgmt |
+| Output fan-out | `main.py:StreamManager._build_output_spec` | tee spec; flv for rtmp, mpegts for srt |
+| Webcam ingest | `frame_pump.py:FramePump` | reader thread + ring buffer + pacer |
+| Kick sink | `main.py:StreamManager` | kick_enabled/kick_rtmp_url/kick_stream_key |
+| Key masking | `main.py:_masked_text/_log_ffmpeg_command` | never log stream keys |
+| State machine | `main.py` | print state → stream actions |
+| Timelapse upload | `main.py:YouTubeUploader` | newest match in `timelapse_dir` |
 | Health check | `main.py` | YouTube API stream health poll |
 
-## CONVENTIONS (Runtime)
+## conventions (runtime)
 
-- Hardware encoding: `-c:v h264_qsv` (Intel QuickSync) is default
+- One ffmpeg process; `tee` muxer handles multi-destination (`[f=flv:onfail=ignore]...|[f=flv:onfail=ignore]...`)
+- MJPEG frames come from `frame_pump` stdin pipe, NOT HTTP (hack flags removed on purpose)
+- Hardware encode default (`h264_qsv`), fallback `libx264`
 - Silent audio track required: `-f lavfi -i anullsrc`
-- MJPEG input → RTMP output (never change this architecture)
-- FFmpeg filter_complex for rescaling/overlay
-- Token loaded from `youtube_token.json` (no OAuth on printer)
+- Token loaded from `youtube_token.json` (no OAuth in the runtime)
 - WebSocket reconnection with exponential backoff
 
-## ANTI-PATTERNS
+## anti-patterns
 
 - Do NOT add OAuth libs to this package — use pre-generated token
+- Do NOT feed ffmpeg from HTTP directly — always through `frame_pump` (starvation bug history)
 - Do NOT remove hardware encoding unless testing fallback
-- Do NOT change filter_complex structure
+- Do NOT change the tee/filter_complex structure
 - Do NOT break config backward compatibility
+- Do NOT log stream keys (use `_mask_key`/`_masked_text`)
 
-## NOTES
+## notes
 
 - **Error state = transient**: Stream continues during Klipper errors
 - Stream stops only on `complete` or `cancelled` states
-- FFmpeg process monitored via subprocess + periodic health checks
+- Kick stream key + ingests are credentials — config.json must stay out of repos
 - Config path: `-c /path/to/config.json` (required)
-- Target: Creality K1/K2/Sonic Pad (OpenWrt/Buildroot) or generic Linux
+- Target: Windows/Linux/macOS streaming machines (QSV/NVENC/VideoToolbox detection); printers accessed over the network only
