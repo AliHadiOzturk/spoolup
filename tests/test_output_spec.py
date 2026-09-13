@@ -41,6 +41,30 @@ def test_kick_missing_key_disabled():
     assert spec == "[f=flv:onfail=ignore]rtmp://yt/YTKEY"
 
 
+def test_srt_with_embedded_streamid():
+    spec = make_spec(FakeConfig({
+        "kick_enabled": True,
+        "kick_stream_key": "",
+        "kick_rtmp_url": "srt://kick.srt.example:9000?streamid=sk_embedded",
+    }))
+    assert spec == (
+        "[f=flv:onfail=ignore]rtmp://yt/YTKEY|"
+        "[f=mpegts:onfail=ignore]srt://kick.srt.example:9000?streamid=sk_embedded"
+    )
+
+
+def test_srt_appends_streamid_when_key_given():
+    spec = make_spec(FakeConfig({
+        "kick_enabled": True,
+        "kick_stream_key": "sk_live",
+        "kick_rtmp_url": "srt://kick.srt.example:9000",
+    }))
+    assert spec == (
+        "[f=flv:onfail=ignore]rtmp://yt/YTKEY|"
+        "[f=mpegts:onfail=ignore]srt://kick.srt.example:9000?streamid=sk_live"
+    )
+
+
 def test_mask_key():
     assert StreamManager._mask_key("s3cret") == "s3cr***"
     assert StreamManager._mask_key("") == "<empty>"
@@ -50,5 +74,7 @@ if __name__ == "__main__":
     test_youtube_only()
     test_kick_enabled_appended()
     test_kick_missing_key_disabled()
+    test_srt_with_embedded_streamid()
+    test_srt_appends_streamid_when_key_given()
     test_mask_key()
     print("test_output_spec: ALL PASS")
