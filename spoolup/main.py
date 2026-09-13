@@ -35,6 +35,8 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from googleapiclient.errors import HttpError
 
+from spoolup.frame_pump import FramePump
+
 # Optional import for SSL disable functionality
 _AuthHttpImportError = None
 try:
@@ -84,6 +86,10 @@ class Config:
         "retry_attempts": 3,
         "retry_delay": 5,
         "disable_ssl_verify": False,
+        "kick_enabled": False,
+        "kick_rtmp_url": "rtmp://fa723fc1b91d4.global-media-services.com:1935/live",
+        "kick_stream_key": "",
+        "ingest_buffer_seconds": 10,
     }
 
     def __init__(self, config_file: str = "config.json"):
@@ -581,7 +587,9 @@ class MoonrakerClient:
         return stats
 
 
-class YouTubeStreamer:
+class StreamManager:
+    """Multi-destination stream manager (YouTube + Kick)."""
+
     def __init__(self, config: Config, youtube_service):
         self.config = config
         self.youtube = youtube_service
@@ -593,6 +601,7 @@ class YouTubeStreamer:
         self.display_title: Optional[str] = None
         self._health_check_thread = None
         self._description_update_thread = None
+        self.frame_pump: Optional[FramePump] = None
 
     def _check_ffmpeg_available(self) -> bool:
         """Check if FFmpeg is installed and available in PATH."""
@@ -639,6 +648,64 @@ class YouTubeStreamer:
 
         logger.info("Using software encoder: libx264")
         return "libx264"
+
+    @staticmethod
+    def _mask_key(key: str) -> str:
+        return (key[:4] + "***") if key else "<empty>"
+
+    def _masked_text(self, text: str) -> str:
+        """Mask stream keys that may appear inside ffmpeg stderr text."""
+        kick_key: str = self.config.get("kick_stream_key") or ""
+        if kick_key and kick_key in text:
+            text = text.replace(kick_key, self._mask_key(kick_key))
+        if self.stream_url:
+            stream_key = self.stream_url.rsplit("/", 1)[-1]
+            if stream_key and stream_key in text:
+                text = text.replace(stream_key, self._mask_key(stream_key))
+            if self.stream_url in text:
+                text = text.replace(self.stream_url, self._mask_key(self.stream_url))
+        return text
+
+    def _log_ffmpeg_command(self, cmd: List[str], label: str) -> None:
+        """Log the FFmpeg command with stream keys masked (log-only)."""
+        kick_key: str = self.config.get("kick_stream_key") or ""
+        masked_cmd = []
+        for part in cmd:
+            if kick_key and kick_key in part:
+                part = part.replace(kick_key, self._mask_key(kick_key))
+            if self.stream_url and self.stream_url in part:
+                part = part.replace(self.stream_url, self._mask_key(self.stream_url))
+            masked_cmd.append(part)
+        logger.info(f"{label}: {' '.join(masked_cmd)}")
+
+    def _build_output_spec(self) -> str:
+        """ffmpeg tee muxer spec: all enabled sinks share the single encode."""
+        parts = []
+        if self.stream_url:
+            parts.append("[f=flv:onfail=ignore]%s" % self.stream_url)
+        if self.config.get("kick_enabled"):
+            kick_key: str = self.config.get("kick_stream_key") or ""
+            kick_rtmp: str = self.config.get("kick_rtmp_url") or ""
+            if not (kick_key and kick_rtmp):
+                logger.warning(
+                    "kick_enabled but kick_stream_key/kick_rtmp_url missing - "
+                    "Kick output DISABLED"
+                )
+            else:
+                parts.append(
+                    "[f=flv:onfail=ignore]%s/%s"
+                    % (kick_rtmp.rstrip("/"), kick_key)
+                )
+                logger.info(
+                    "Kick output enabled: %s/%s",
+                    kick_rtmp,
+                    self._mask_key(kick_key),
+                )
+        if not parts:
+            raise ValueError(
+                "No RTMP outputs configured (stream_url missing and Kick disabled)"
+            )
+        return "|".join(parts)
 
     def _build_ffmpeg_cmd(self, webcam_url: str) -> List[str]:
         """Build FFmpeg command with optimal settings for YouTube streaming."""
@@ -690,22 +757,9 @@ class YouTubeStreamer:
             "-hide_banner",
             "-loglevel", "warning",
             "-stats",
-            # Input flags: discard corrupt frames but allow buffering
-            "-fflags", "+discardcorrupt",
-            # Minimal probing: large values (32M/5M) caused ~5s pre-read backlog,
-            # leading to a burst drain of the webcam buffer and a compensating
-            # 9-second input stall (videoIngestionStarved). 1M/500K is enough for
-            # MJPEG format detection while keeping startup near-realtime.
-            "-probesize", "1M",
-            "-analyzeduration", "500K",
-            # Input thread queue: larger buffer to absorb webcam micro-stalls.
-            # Webcam deterministically stalls at ~frame 308 for ~9s; a deeper queue
-            # paired with output CFR pacing (below) keeps frames available during gaps.
-            "-thread_queue_size", "2048",
-            # Use wallclock timestamps for network MJPEG (no inherent timestamps)
-            "-use_wallclock_as_timestamps", "1",
+            # Input: MJPEG frames fed by FramePump over stdin
             "-f", "mjpeg",
-            "-i", webcam_url,
+            "-i", "pipe:0",
             # Silent audio source (required by YouTube)
             "-f", "lavfi",
             "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
@@ -730,12 +784,105 @@ class YouTubeStreamer:
             # Stop when shortest input ends (prevents infinite anullsrc)
             "-shortest",
             # Output format
-            "-f", "flv",
-            self.stream_url,
+            "-f", "tee",
+            self._build_output_spec(),
         ]
 
-        logger.info(f"FFmpeg command: {' '.join(cmd)}")
+        self._log_ffmpeg_command(cmd, "FFmpeg command")
         return cmd
+
+    def _spawn_pipeline(self, webcam_url: str) -> bool:
+        """Start FramePump + ffmpeg (stdin=PIPE). Shared by start/restart."""
+        fps: int = self.config.get("stream_fps") or 30
+        buffer_seconds: int = self.config.get("ingest_buffer_seconds") or 10
+
+        pump = FramePump(webcam_url, fps, buffer_seconds)
+        pump.start()
+        if not pump.wait_for_first_frame(timeout=10.0):
+            pump.stop()
+            return False
+
+        cmd = self._build_ffmpeg_cmd(webcam_url)
+        self._last_cmd = cmd
+        self._last_webcam_url = webcam_url
+        self._log_ffmpeg_command(cmd, "Starting FFmpeg stream")
+        process = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+        self.frame_pump = pump
+        self.ffmpeg_process = process
+        self._start_ffmpeg_stderr_logger()
+
+        time.sleep(5)
+        if process.poll() is not None:
+            self._log_ffmpeg_start_failure(process.poll())
+            return self._retry_with_software_encoder(pump)
+
+        try:
+            pump.serve(process.stdin.fileno())
+        except Exception as e:
+            logger.error(f"Could not start frame pacer: {e}")
+            process.kill()
+            pump.stop()
+            self.frame_pump = None
+            self.ffmpeg_process = None
+            return False
+        return True
+
+    def _log_ffmpeg_start_failure(self, exit_code: Optional[int]) -> None:
+        logger.error(f"FFmpeg exited with code {exit_code} at startup")
+        proc = self.ffmpeg_process
+        if proc and proc.stderr:
+            try:
+                stderr_output = proc.stderr.read() or b""
+                if stderr_output:
+                    text = stderr_output.decode("utf-8", "replace")[-2000:]
+                    logger.error("FFmpeg error output: %s", self._masked_text(text))
+            except Exception as e:
+                logger.debug(f"Could not read FFmpeg stderr: {e}")
+
+    def _retry_with_software_encoder(self, pump: FramePump) -> bool:
+        """Hardware encode failed at startup — retry once with libx264.
+
+        `self._last_cmd` / `self._last_webcam_url` were recorded by
+        `_spawn_pipeline` right before Popen.
+        """
+        cmd = list(self._last_cmd or [])
+        if not cmd or "-c:v" not in cmd:
+            self._kill_ffmpeg()
+            return False
+        if cmd[cmd.index("-c:v") + 1] == "libx264":
+            self._kill_ffmpeg()
+            return False
+        logger.warning("Hardware encoder failed; falling back to libx264")
+        original_detect = self._detect_h264_encoder
+        self._detect_h264_encoder = lambda: "libx264"
+        try:
+            pump.stop()
+            self.frame_pump = None
+            if not self._spawn_pipeline(self._last_webcam_url):
+                self._kill_ffmpeg()
+                return False
+            return True
+        finally:
+            self._detect_h264_encoder = original_detect
+
+    def _kill_ffmpeg(self) -> None:
+        if self.frame_pump is not None:
+            self.frame_pump.stop()
+            self.frame_pump = None
+        if self.ffmpeg_process is not None:
+            logger.info("Terminating existing FFmpeg process")
+            self.ffmpeg_process.terminate()
+            try:
+                self.ffmpeg_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.ffmpeg_process.kill()
+                self.ffmpeg_process.wait()
+            self.ffmpeg_process = None
 
     def _map_resolution_to_youtube_format(self, resolution: str) -> str:
         resolution_map = {
@@ -799,7 +946,11 @@ class YouTubeStreamer:
             )
 
             logger.info(f"Live stream created: {stream_id}")
-            logger.info(f"Stream URL: {self.stream_url}")
+            logger.info(
+                "Stream URL: %s/%s",
+                ingestion_info["ingestionAddress"],
+                self._mask_key(ingestion_info["streamName"]),
+            )
 
             start_time = datetime.now(timezone.utc)
             end_time = start_time + timedelta(hours=24)
@@ -1279,18 +1430,11 @@ class YouTubeStreamer:
     def _restart_ffmpeg_stream(self):
         logger.warning("Restarting FFmpeg stream due to ingestion starvation")
         try:
-            if self.ffmpeg_process:
-                logger.info("Terminating existing FFmpeg process")
-                self.ffmpeg_process.terminate()
-                try:
-                    self.ffmpeg_process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    self.ffmpeg_process.kill()
-                    self.ffmpeg_process.wait()
-                self.ffmpeg_process = None
-
-            time.sleep(3)
-
+            self._kill_ffmpeg()
+        except Exception as e:
+            logger.error(f"Failed to stop old pipeline: {e}")
+        time.sleep(3)
+        try:
             # Reload config to pick up any changes
             self.config.load()
 
@@ -1303,24 +1447,10 @@ class YouTubeStreamer:
                 logger.error("Cannot restart - no stream URL available")
                 return
 
-            cmd = self._build_ffmpeg_cmd(webcam_url)
-
-            self.ffmpeg_process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                bufsize=1,
-                universal_newlines=True,
-            )
-
-            self._start_ffmpeg_stderr_logger()
-
-            time.sleep(5)
-            if self.ffmpeg_process.poll() is not None:
-                logger.error("FFmpeg restart failed (process exited)")
-            else:
-                logger.info("FFmpeg restarted successfully")
-
+            if not self._spawn_pipeline(webcam_url):
+                logger.error("FFmpeg restart failed")
+                return
+            logger.info("FFmpeg pipeline restarted successfully")
         except Exception as e:
             logger.error(f"Failed to restart FFmpeg stream: {e}")
 
@@ -1418,88 +1548,15 @@ class YouTubeStreamer:
             return False
 
         try:
-            logger.info(f"Testing webcam connectivity: {webcam_url}")
-            import requests
+            logger.info("Testing RTMP connectivity to YouTube...")
+            self._test_rtmp_connectivity()
 
-            response = requests.get(webcam_url, timeout=10, stream=True)
-            if response.status_code != 200:
-                logger.error(f"Webcam returned HTTP {response.status_code}")
-                return False
-            chunk = next(response.iter_content(chunk_size=1024), None)
-            if not chunk:
-                logger.error("Webcam stream returned empty data")
-                return False
-            logger.info("Webcam connectivity test passed")
-        except Exception as e:
-            logger.error(f"Webcam connectivity test failed: {e}")
-            return False
-
-        logger.info(f"Testing RTMP connectivity to YouTube...")
-        self._test_rtmp_connectivity()
-
-        try:
-            cmd = self._build_ffmpeg_cmd(webcam_url)
-            logger.info(f"Starting FFmpeg stream: {' '.join(cmd)}")
-
-            self.ffmpeg_process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                bufsize=1,
-                universal_newlines=True,
-            )
-
-            self._start_ffmpeg_stderr_logger()
-
-            time.sleep(5)
-            if self.ffmpeg_process.poll() is not None:
-                exit_code = self.ffmpeg_process.poll()
+            if not self._spawn_pipeline(webcam_url):
                 logger.error(
-                    f"FFmpeg failed to start (process exited with code {exit_code})"
+                    "Pipeline failed to start (no frames from %s or FFmpeg died)",
+                    webcam_url,
                 )
-                
-                # Try to read stderr for error details
-                stderr_output = ""
-                if self.ffmpeg_process.stderr:
-                    try:
-                        stderr_output = self.ffmpeg_process.stderr.read()
-                        if stderr_output:
-                            logger.error(
-                                f"FFmpeg error output: {stderr_output[-2000:]}"
-                            )
-                    except Exception as e:
-                        logger.debug(f"Could not read FFmpeg stderr: {e}")
-                
-                # If hardware encoder failed, fallback to libx264
-                if "h264_" in cmd[cmd.index("-c:v") + 1] and "libx264" not in cmd:
-                    logger.warning("Hardware encoder failed, falling back to libx264")
-                    # Override encoder detection to force software encoding
-                    original_detect = self._detect_h264_encoder
-                    self._detect_h264_encoder = lambda: "libx264"
-                    
-                    try:
-                        cmd = self._build_ffmpeg_cmd(webcam_url)
-                        logger.info(f"Retrying with software encoder: {' '.join(cmd)}")
-                        
-                        self.ffmpeg_process = subprocess.Popen(
-                            cmd,
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.PIPE,
-                            bufsize=1,
-                            universal_newlines=True,
-                        )
-                        
-                        self._start_ffmpeg_stderr_logger()
-                        
-                        time.sleep(5)
-                        if self.ffmpeg_process.poll() is not None:
-                            logger.error("Software encoder also failed")
-                            return False
-                    finally:
-                        # Restore original detection method
-                        self._detect_h264_encoder = original_detect
-                else:
-                    return False
+                return False
 
             if self.live_stream and self.live_broadcast:
                 stream_id = self.live_stream["id"]
@@ -1573,11 +1630,12 @@ class YouTubeStreamer:
                 )
                 if self.ffmpeg_process.stderr:
                     try:
-                        stderr_output = self.ffmpeg_process.stderr.read()
+                        stderr_output = self.ffmpeg_process.stderr.read() or b""
                         if stderr_output:
-                            logger.error(
-                                f"FFmpeg stderr: {stderr_output[-1000:]}"
-                            )  # Last 1000 chars
+                            text = stderr_output.decode("utf-8", "replace")[
+                                -1000:
+                            ]  # Last 1000 chars
+                            logger.error(f"FFmpeg stderr: {self._masked_text(text)}")
                     except:
                         pass
                 self.is_streaming = False
@@ -1591,15 +1649,16 @@ class YouTubeStreamer:
 
     def _start_ffmpeg_stderr_logger(self):
         def log_stderr():
-            if not self.ffmpeg_process or not self.ffmpeg_process.stderr:
+            proc = self.ffmpeg_process
+            if not proc or not proc.stderr:
                 return
             try:
-                for line in iter(self.ffmpeg_process.stderr.readline, ""):
+                for line in iter(proc.stderr.readline, b""):
                     if not line:
                         break
-                    line = line.strip()
-                    if line:
-                        logger.info(f"FFmpeg: {line}")
+                    text = line.decode("utf-8", "replace").strip()
+                    if text:
+                        logger.info(f"FFmpeg: {self._masked_text(text)}")
             except Exception as e:
                 logger.debug(f"FFmpeg stderr logger exited: {e}")
 
@@ -1636,15 +1695,7 @@ class YouTubeStreamer:
                 time.sleep(delay)
                 self._transition_broadcast(self.live_broadcast["id"], "complete")
 
-            if self.ffmpeg_process:
-                logger.info("Stopping FFmpeg...")
-                self.ffmpeg_process.terminate()
-                try:
-                    self.ffmpeg_process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    self.ffmpeg_process.kill()
-                    self.ffmpeg_process.wait()
-                self.ffmpeg_process = None
+            self._kill_ffmpeg()
 
             self.is_streaming = False
             logger.info("Live streaming stopped")
@@ -1801,7 +1852,7 @@ class SpoolUp:
                 self.youtube = build("youtube", "v3", credentials=creds)
 
             if self.config.get("enable_live_stream", True):
-                self.streamer = YouTubeStreamer(self.config, self.youtube)
+                self.streamer = StreamManager(self.config, self.youtube)
             if self.config.get("enable_timelapse_upload", True):
                 self.uploader = YouTubeUploader(self.config, self.youtube)
 

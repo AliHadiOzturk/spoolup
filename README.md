@@ -236,6 +236,10 @@ spoolup/
 | `video_privacy` | Uploaded timelapse privacy | `private` |
 | `enable_live_stream` | Enable live streaming | `true` |
 | `enable_timelapse_upload` | Enable timelapse upload | `true` |
+| `kick_enabled` | Also push the live stream to Kick simultaneously | `false` |
+| `kick_rtmp_url` | Kick RTMP ingest URL (Kick Creator dashboard) | `rtmp://fa723fc1b91d4.global-media-services.com:1935/live` |
+| `kick_stream_key` | Kick stream key (keep secret; never commit) | `` |
+| `ingest_buffer_seconds` | Webcam-side frame buffer absorbing camera stalls | `10` |
 
 ## 🐛 Troubleshooting
 
