@@ -17,6 +17,7 @@ import time
 import ssl
 import logging
 import argparse
+import re
 import subprocess
 import threading
 import tempfile
@@ -658,6 +659,12 @@ class StreamManager:
         kick_key: str = self.config.get("kick_stream_key") or ""
         if kick_key and kick_key in text:
             text = text.replace(kick_key, self._mask_key(kick_key))
+        # Mask any 'streamid=<value>' (SRT URLs may embed the key there)
+        text = re.sub(
+            r"(streamid=)[^\s&|]+",
+            lambda m: m.group(1) + "sk_id***",
+            text,
+        )
         if self.stream_url:
             stream_key = self.stream_url.rsplit("/", 1)[-1]
             if stream_key and stream_key in text:
@@ -668,39 +675,47 @@ class StreamManager:
 
     def _log_ffmpeg_command(self, cmd: List[str], label: str) -> None:
         """Log the FFmpeg command with stream keys masked (log-only)."""
-        kick_key: str = self.config.get("kick_stream_key") or ""
-        masked_cmd = []
-        for part in cmd:
-            if kick_key and kick_key in part:
-                part = part.replace(kick_key, self._mask_key(kick_key))
-            if self.stream_url and self.stream_url in part:
-                part = part.replace(self.stream_url, self._mask_key(self.stream_url))
-            masked_cmd.append(part)
+        masked_cmd = [self._masked_text(part) for part in cmd]
         logger.info(f"{label}: {' '.join(masked_cmd)}")
 
     def _build_output_spec(self) -> str:
-        """ffmpeg tee muxer spec: all enabled sinks share the single encode."""
+        """ffmpeg tee muxer spec: all enabled sinks share the single encode.
+
+        RTMP/RTMPS sinks use the FLV muxer; SRT sinks use MPEG-TS (the
+        transport SRT carries). Key handling: for `srt://` URLs the stream
+        id may already be embedded in `streamid=` (Kick dashboard style) —
+        otherwise kick_stream_key is appended as a streamid query param.
+        """
         parts = []
         if self.stream_url:
             parts.append("[f=flv:onfail=ignore]%s" % self.stream_url)
         if self.config.get("kick_enabled"):
             kick_key: str = self.config.get("kick_stream_key") or ""
-            kick_rtmp: str = self.config.get("kick_rtmp_url") or ""
-            if not (kick_key and kick_rtmp):
+            kick_url: str = self.config.get("kick_rtmp_url") or ""
+            kick_url = kick_url.strip()
+            srt = kick_url.lower().startswith("srt://")
+            ok = bool(kick_url) and (bool(kick_key) or "streamid=" in kick_url)
+            if not ok:
                 logger.warning(
                     "kick_enabled but kick_stream_key/kick_rtmp_url missing - "
                     "Kick output DISABLED"
                 )
             else:
-                parts.append(
-                    "[f=flv:onfail=ignore]%s/%s"
-                    % (kick_rtmp.rstrip("/"), kick_key)
-                )
-                logger.info(
-                    "Kick output enabled: %s/%s",
-                    kick_rtmp,
-                    self._mask_key(kick_key),
-                )
+                if srt:
+                    url = kick_url
+                    if kick_key and "streamid=" not in url:
+                        url += ("&" if "?" in url else "?") + "streamid=" + kick_key
+                    parts.append("[f=mpegts:onfail=ignore]%s" % url)
+                    logger.info(
+                        "Kick output enabled (SRT): %s",
+                        self._masked_text(url),
+                    )
+                else:
+                    url = "%s/%s" % (kick_url.rstrip("/"), kick_key)
+                    parts.append("[f=flv:onfail=ignore]%s" % url)
+                    logger.info(
+                        "Kick output enabled (RTMP): %s", self._masked_text(url)
+                    )
         if not parts:
             raise ValueError(
                 "No RTMP outputs configured (stream_url missing and Kick disabled)"
