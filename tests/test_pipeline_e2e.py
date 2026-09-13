@@ -41,6 +41,12 @@ def main():
     pump._reader_thread = None
     pump._pacer_thread = None
     pump._response = None
+    pump._stats_lock = threading.Lock()
+    pump._stats_frames_read = 0
+    pump._stats_bytes_read = 0
+    pump._stats_frames_stale_dropped = 0
+    pump._stats_frames_paced = 0
+    pump._stats_frames_starved = 0
     for f in frames:
         pump._push_frame(f)
 
