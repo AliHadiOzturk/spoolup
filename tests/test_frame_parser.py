@@ -27,6 +27,23 @@ def test_parse_splits_chunks_arbitrarily():
     assert got == frames
 
 
+def test_parse_zero_padded_frames():
+    # K1-style MJPG-Streamer pads payloads with NUL bytes after the JPEG
+    boundary = b"boundarydonotcross"
+    frames = [make_jpeg(i) for i in range(5)]
+    out = bytearray()
+    for f in frames:
+        out += b"--" + boundary + b"\r\n"
+        out += b"Content-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n" % len(f)
+        out += f + b"\x00\x00\x00\x00" + b"\r\n"
+    out += b"--" + boundary + b"--\r\n"
+    p = MjpegFrameParser(boundary)
+    got = []
+    for ch in chunked(bytes(out), [1, 7, 3, 109, 2]):
+        got.extend(p.feed(ch))
+    assert got == frames
+
+
 def test_parse_leading_garbage():
     boundary = b"xyz"
     frames = [make_jpeg(i) for i in range(2)]
@@ -52,5 +69,6 @@ if __name__ == "__main__":
     test_parse_clean_stream()
     test_parse_splits_chunks_arbitrarily()
     test_parse_leading_garbage()
+    test_parse_zero_padded_frames()
     test_no_boundary_falls_back_to_soiful_scan()
     print("test_frame_parser: ALL PASS")
