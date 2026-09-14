@@ -54,7 +54,11 @@ class MjpegFrameParser:
             head_end = part.find(b"\r\n\r\n")
             if head_end == -1:
                 continue
-            payload = part[head_end + 4:].strip(b"\r\n")
+            payload = part[head_end + 4:]
+            # Some servers zero-pad frames to a multiple of N: trim the
+            # trailing CRLF and any padding so the payload ends at EOI.
+            while payload and payload[-1:] in (b"\r", b"\n", b"\x00"):
+                payload = payload[:-1]
             if payload.startswith(_SOI) and payload.endswith(_EOI):
                 frames.append(payload)
         return frames
