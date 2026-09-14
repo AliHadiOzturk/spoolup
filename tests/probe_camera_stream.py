@@ -38,6 +38,8 @@ def main() -> None:
         frames_total = 0
         sizes_total = 0
         first_bytes_shot = False
+        boundary_markers: list = []
+        chunks_list: list = []
         for chunk in resp.iter_content(chunk_size=65536):
             if not chunk:
                 continue
@@ -46,8 +48,7 @@ def main() -> None:
             bytes_total += len(chunk)
             soi += chunk.count(b"\xff\xd8")
             eoi += chunk.count(b"\xff\xd9")
-            if boundary:
-                marker += chunk.count(b"--" + boundary)
+            chunks_list.append(chunk)
             if not first_bytes_shot:
                 print("first 300 bytes:", chunk[:300])
                 first_bytes_shot = True
@@ -61,6 +62,7 @@ def main() -> None:
             print(f"bytes received: {bytes_total} ({bytes_total/10/1024:.0f} KB/s)")
             print(f"SOI markers: {soi}  EOI markers: {eoi}")
             if boundary:
+                marker += sum(c.count(b"--" + boundary) for c in chunks_list)
                 print(f"boundary markers: {marker}")
             print(
                 f"parser frames: {frames_total} "
@@ -68,6 +70,38 @@ def main() -> None:
                 f"{(sizes_total/max(1, frames_total))/1024:.0f} KB"
             )
             break
+
+        # Offline classification of the SAME bytes: why are parts rejected?
+        if boundary:
+            full = b"".join(chunks_list)
+            parts = full.split(b"--" + boundary)
+            parts = parts[1:]  # leading empty segment
+            cat = {"ok": 0, "no_header_end": 0, "not_soi": 0, "not_eoi": 0}
+            rejects = []
+            for part in parts:
+                if part.endswith(b"--\r\n"):
+                    continue  # terminal boundary
+                head_end = part.find(b"\r\n\r\n")
+                if head_end == -1:
+                    cat["no_header_end"] += 1
+                    rejects.append(("no_header_end", part[:80]))
+                    continue
+                payload = part[head_end + 4:].strip(b"\r\n")
+                if not payload.startswith(b"\xff\xd8"):
+                    cat["not_soi"] += 1
+                    if len(rejects) < 3:
+                        rejects.append(("not_soi", payload[:60]))
+                    continue
+                if not payload.endswith(b"\xff\xd9"):
+                    cat["not_eoi"] += 1
+                    if len(rejects) < 3:
+                        rejects.append(("not_eoi", payload[-60:]))
+                    continue
+                cat["ok"] += 1
+            print("--- offline split classification ---")
+            print(cat)
+            for kind, sample in rejects:
+                print(f"reject[{kind}]: {sample!r}")
 
 
 if __name__ == "__main__":
