@@ -772,8 +772,13 @@ class StreamManager:
             "-hide_banner",
             "-loglevel", "warning",
             "-stats",
-            # Input: MJPEG frames fed by FramePump over stdin
-            "-f", "mjpeg",
+            # Input: MJPEG frames fed by FramePump over stdin.
+            # -framerate MUST match the pump's pacing (stream_fps): the raw
+            # mjpeg demuxer assumes 25fps otherwise and the output timeline
+            # drifts progressively behind realtime on long prints.
+            "-f", "image2pipe",
+            "-framerate", str(fps),
+            "-c:v", "mjpeg",
             "-i", "pipe:0",
             # Silent audio source (required by YouTube)
             "-f", "lavfi",
