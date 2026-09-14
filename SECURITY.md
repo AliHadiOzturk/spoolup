@@ -16,7 +16,7 @@ SpoolUp deals with several sensitive credentials. Follow these rules:
 | Credential | Where it lives | Rule |
 |---|---|---|
 | `client_secrets.json` | Your PC/Mac (auth machine) | Never commit; never copy to the printer unless required |
-| `youtube_token.json` | Printer (`/usr/data/spoolup/`) | Never commit; treat as a password |
+| `youtube_token.json` | Streaming machine (wherever `config.json` points `token_file`) | Never commit; treat as a password |
 | `video_management/.env` | VMS server | Never commit; contains `SECRET_KEY` and TikTok/YouTube secrets |
 | `video_management/data/` | VMS server | Contains SQLite DB, tokens, and session data — restrict filesystem permissions |
 | Moonraker API key | `.env` (`MOONRAKER_API_KEY`) | Optional, but recommended on untrusted networks |
@@ -49,10 +49,11 @@ The web application in `video_management/` ships with the following protections:
 4. **Restrict CORS origins** to your actual frontend origin(s).
 5. **Back up `data/vms.db`** — it holds all upload history and analytics.
 
-## Printer Runtime Security
+## Runtime (`spoolup/`) Security
 
-- The printer-side daemon (`spoolup/`) loads a pre-generated OAuth token and never performs an OAuth flow on the printer.
-- OAuth libraries are intentionally **not installed** on the printer to reduce attack surface and footprint.
+- The `spoolup/` runtime runs on your streaming machine (PC/Mac/server — not the printer) and loads a pre-generated OAuth token; it never performs an OAuth flow itself.
+- OAuth libraries are intentionally **not installed** in the runtime to reduce attack surface and footprint.
+- `kick_stream_key` lives in `config.json` on the streaming machine — restrict filesystem permissions and never commit that file.
 - Do not expose Moonraker or the webcam stream to the public internet without authentication.
 
 ## Scope

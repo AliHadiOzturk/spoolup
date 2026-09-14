@@ -7,7 +7,7 @@
 ## OVERVIEW
 A multi-component project for Klipper-based 3D printers:
 
-- **`spoolup/`** — Printer-side runtime: streams live video to YouTube during prints and uploads timelapse videos when complete. Split architecture: authentication on PC/Mac (`spoolup_auth/`), runtime on printer.
+- **`spoolup/`** — Streaming machine runtime (PC/Mac/server — NOT on the printer): monitors Moonraker over the network, streams live video to YouTube + Kick (single ffmpeg encode, tee muxer, buffered MJPEG ingest via `frame_pump.py`), uploads timelapses on completion. Split architecture: authentication on PC/Mac (`spoolup_auth/`).
 - **`video_management/`** — Self-contained FastAPI web app (VMS): discovers timelapses from Moonraker printers, processes them to 9:16 vertical, uploads to YouTube Shorts and TikTok, with analytics dashboard and midnight sync. See `video_management/README.md`.
 - **`landing/`** — Static marketing site (plain HTML/CSS/JS), deployed to Cloudflare Workers via root `wrangler.jsonc`. See `landing/README.md`.
 
@@ -125,7 +125,7 @@ npx wrangler deploy                      # deploy to Cloudflare
 - **Never commit credential files** (`client_secrets.json`, `youtube_token.json`)
 - **Never log sensitive tokens** or credentials
 - **Never modify `spoolup.py`** — it is deprecated
-- **Never install OAuth libraries** on the printer runtime (use split requirements)
+- **Never install OAuth libraries** into the runtime (use split requirements)
 - Do NOT switch away from hardware encoding (`h264_qsv`) unless fallback needed
 - Do NOT change fundamental architecture (keep MJPEG input, RTMP output)
 - Do NOT break existing configs — maintain backward compatibility
@@ -133,16 +133,16 @@ npx wrangler deploy                      # deploy to Cloudflare
 ## NOTES
 
 ### Architecture
-- **Split design**: Auth on PC/Mac, runtime on printer
-- Runtime loads token from `youtube_token.json` (no OAuth flow on printer)
-- Saves ~50MB by not installing OAuth libraries on embedded systems
+- **Split design**: Auth separate from runtime; runtime runs on a PC/streaming machine, connecting to the printer over the network (printer CPUs can't sustain live encoding)
+- Runtime loads token from `youtube_token.json` (no OAuth flow in the runtime)
+- Runtime package intentionally excludes OAuth libraries
 
 ### Repository Layout
-- `spoolup/`, `spoolup_auth/` — printer runtime + PC/Mac auth tool (see `spoolup/AGENTS.md`)
+- `spoolup/`, `spoolup_auth/` — streaming-machine runtime + PC/Mac auth tool (see `spoolup/AGENTS.md`)
 - `video_management/` — self-contained FastAPI VMS with its own venv, SQLite DB, and Alembic migrations (see `video_management/README.md`)
 - `landing/` — static marketing site served as Cloudflare Workers assets (see `landing/README.md`)
 - `docs/` — external API references (YouTube, TikTok, Moonraker), Docker guides, short-form video standards
-- `install.sh` — main interactive installer (box-drawn UI, auto-detects OS)
+- `install.sh` — interactive installer for embedded/generic Linux (printer-class hardware typically cannot sustain live encoding — legacy path)
 - `install_k1.sh`, `install_generic.sh`, `install_universal.py`/`install_universal.sh` — platform-specific/universal installer variants
 - `manage_service.py`/`manage_service.sh` — universal service manager (systemd/init.d on Linux, launchd on macOS, schtasks on Windows)
 - `spoolup.service`, `docker-compose.yml`, `DOCKER_IMPLEMENTATION.md` — systemd unit and Docker deployment for the VMS
@@ -156,23 +156,21 @@ npx wrangler deploy                      # deploy to Cloudflare
 - Video streaming proxy (`/api/videos/{id}/stream`, `/api/videos/{id}/thumbnail`) supports token in query params for `<video>`/`<img>` tags
 
 ### Installation
-- New installer: `git clone` then `sh install.sh` (interactive, box-drawn UI)
-- Creates Python virtual environment at `/usr/data/spoolup-env` (K1) or `/opt/spoolup-env` (generic)
-- Auto-detects OS: K1, K2, Sonic Pad, or generic Linux
+- Standard path: pip install requirements and `python -m spoolup -c config.json` on the streaming machine
+- Embedded-Linux installer exists (`install.sh`, `/usr/data/spoolup-env` K1 / `/opt/spoolup-env` generic) but printer-class hardware cannot sustain live encoding — legacy
 
 ### Running
 - Runtime: `python -m spoolup -c config.json`
 - Auth: `python -m spoolup_auth --client-secrets client_secrets.json`
-- Service: `/etc/init.d/S99spoolup start` (K1) or `systemctl start spoolup` (systemd)
+- Service: `manage_service.py` (systemd/init.d/launchd/schtasks) or manual `python -m spoolup -c config.json`
 
-### Target Platforms
-- Creality K1 / K1 Max / K1C / K2 Plus
-- Creality Sonic Pad
-- Generic Linux with systemd or init.d
+### Target Environments
+- Any PC/Mac/Linux machine with network access to the printer (Windows supported: QSV/NVENC detection included)
+- Printers are accessed over the network only (Moonraker + MJPEG webcam)
 
 ### Development Tips
 - Always run `python -m py_compile` to check syntax before committing
-- Test on both PC/Mac (auth) and printer (runtime) environments
+- Test auth on PC/Mac and the runtime on the streaming machine (config points at printer over LAN)
 - Use `logger` for all output, avoid `print()` in production code
 - Handle WebSocket disconnections gracefully with reconnection logic
 - Use `--auth-only` flag to test authentication without streaming
