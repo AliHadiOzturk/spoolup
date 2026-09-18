@@ -1,10 +1,8 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="wizard">
-<h1>First-time setup</h1>
-<p class="badge">Everything on this page is stored locally &mdash; no secrets
-are sent to any remote host.</p>
-<div class="grid">
+<div class="wizard-card">
+  <h1>First-time setup</h1>
+  <p class="badge step-hint">Everything on this page stays on this machine — no secrets leave it.</p>
   <form class="tb" id="cfgform" onsubmit="return false">
     {% for key, value in config.items() %}
       {% if key == 'kick_stream_key' %}
@@ -24,62 +22,64 @@ are sent to any remote host.</p>
       {% endif %}
     {% endfor %}
   </form>
-  <div class="card">
-    <h2>YouTube token</h2>
-    <p>Upload the <code>youtube_token.json</code> produced by
-    <code>spoolup_auth</code> on your PC/Mac.</p>
-    <input type="file" id="token-file" accept=".json,application/json">
+  <div class="grid">
+    <div class="card col-12">
+      <div class="card-label">YouTube token</div>
+      <div class="upload-zone">
+        Upload the <code>youtube_token.json</code> produced by <code>spoolup_auth</code> on your PC/Mac.<br>
+        <input type="file" id="token-file" accept=".json,application/json" style="border:0;margin-top:8px;max-width:280px">
+      </div>
+    </div>
   </div>
-</div>
-<div class="actions">
-  <button onclick="saveAndOpen()">Save and open dashboard</button>
-  <button onclick="probe('test-webcam')">Test webcam</button>
-  <button onclick="probe('test-moonraker')">Test Moonraker</button>
-</div>
-<div id="test-result"></div>
-<script>
-async function saveConfig() {
-  const values = {};
-  document.querySelectorAll("#cfgform [data-key]").forEach((el) => {
-    let v = el.value;
-    const asBool = {true: true, false: false}[v];
-    if (asBool !== undefined) v = asBool;
-    else if (el.dataset.int === "1") v = parseInt(v, 10);
-    values[el.dataset.key] = v;
-  });
-  const r = await fetch("/api/config", {
-    method: "PUT",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify(values),
-  });
-  return (await r.json()).ok === true;
-}
-async function uploadToken() {
-  const input = document.getElementById("token-file");
-  if (!input.files.length) return true;
-  const fd = new FormData();
-  fd.append("token", input.files[0]);
-  const r = await fetch("/api/wizard/token", {method: "POST", body: fd});
-  return (await r.json()).ok === true;
-}
-async function saveAndOpen() {
-  const ok = (await saveConfig()) && (await uploadToken());
-  document.getElementById("test-result").textContent =
-      ok ? "Saved. Restart the application to apply new configuration."
-         : "Invalid values.";
-  if (ok) location.reload();
-}
-async function probe(kind) {
-  const key = kind === "test-webcam" ? "webcam_url" : "moonraker_url";
-  const url = document.querySelector("#cfgform [data-key='" + key + "']").value;
-  const r = await fetch("/api/config/" + kind, {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({url: url}),
-  });
-  document.getElementById("test-result").textContent =
-      (await r.json()).ok ? "OK" : "FAILED";
-}
-</script>
+  <div class="actions">
+    <button class="primary" onclick="saveAndOpen()">Save and open dashboard</button>
+    <button class="ghost" onclick="probe('test-webcam')">Test webcam</button>
+    <button class="ghost" onclick="probe('test-moonraker')">Test Moonraker</button>
+  </div>
+  <div id="test-result"></div>
+  <script>
+  async function saveConfig() {
+    const values = {};
+    document.querySelectorAll("#cfgform [data-key]").forEach((el) => {
+      let v = el.value;
+      const asBool = {true: true, false: false}[v];
+      if (asBool !== undefined) v = asBool;
+      else if (el.dataset.int === "1") v = parseInt(v, 10);
+      values[el.dataset.key] = v;
+    });
+    const r = await fetch("/api/config", {
+      method: "PUT",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(values),
+    });
+    return (await r.json()).ok === true;
+  }
+  async function uploadToken() {
+    const input = document.getElementById("token-file");
+    if (!input.files.length) return true;
+    const fd = new FormData();
+    fd.append("token", input.files[0]);
+    const r = await fetch("/api/wizard/token", {method: "POST", body: fd});
+    return (await r.json()).ok === true;
+  }
+  async function saveAndOpen() {
+    const ok = (await saveConfig()) && (await uploadToken());
+    document.getElementById("test-result").textContent =
+        ok ? "Saved. Restart the application to apply new configuration."
+           : "Invalid values.";
+    if (ok) setTimeout(() => location.reload(), 900);
+  }
+  async function probe(kind) {
+    const key = kind === "test-webcam" ? "webcam_url" : "moonraker_url";
+    const url = document.querySelector("#cfgform [data-key='" + key + "']").value;
+    const r = await fetch("/api/config/" + kind, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({url: url}),
+    });
+    document.getElementById("test-result").textContent =
+        (await r.json()).ok ? "Connection OK" : "Connection failed";
+  }
+  </script>
 </div>
 {% endblock %}

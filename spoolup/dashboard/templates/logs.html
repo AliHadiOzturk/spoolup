@@ -1,11 +1,28 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Logs</h1>
-<pre id="logbox">loading…</pre>
+<pre id="logbox" class="skeleton" aria-hidden="true">loading</pre>
 <script>
-setInterval(async () => {
-  const r = await (await fetch("/api/logs?limit=200")).json();
-  document.getElementById("logbox").textContent = r.lines.join("\n");
-}, 2000);
+async function refreshLogs() {
+  try {
+    const r = await (await fetch("/api/logs?limit=200")).json();
+    const box = document.getElementById("logbox");
+    box.classList.remove("skeleton");
+    box.textContent = "";
+    (r.lines || []).forEach((line) => {
+      const span = document.createElement("span");
+      let cls = "lv-info";
+      if (/ - ERROR - /.test(line)) cls = "lv-error";
+      else if (/ - WARNING - /.test(line)) cls = "lv-warning";
+      else if (/ - DEBUG - /.test(line)) cls = "lv-debug";
+      span.className = "line " + cls;
+      span.textContent = line;
+      box.appendChild(span);
+    });
+    box.scrollTop = box.scrollHeight;
+  } catch (e) { /* transient */ }
+}
+document.addEventListener("DOMContentLoaded", refreshLogs);
+setInterval(refreshLogs, 2000);
 </script>
 {% endblock %}

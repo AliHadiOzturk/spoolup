@@ -2,8 +2,16 @@
 {% block content %}
 <h1>Printer</h1>
 {% if mainsail_url %}
-<iframe src="{{ mainsail_url }}" style="width:100%;height:80vh;border:0;border-radius:10px;"></iframe>
+<div class="iframe-wrap">
+  <iframe src="{{ mainsail_url }}" title="Mainsail printer interface"></iframe>
+</div>
 {% else %}
-<div class="card">Set <code>mainsail_url</code> in Settings to embed Mainsail here (e.g. http://192.168.1.115:4408).</div>
+<div class="card">
+  <div class="card-label">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9V3h12v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M6 17h12v4H6z"/></svg>
+    Mainsail
+  </div>
+  <p class="hint" style="margin:4px 0 10px">Set <code>mainsail_url</code> in Settings to embed Mainsail here (e.g. <code>http://192.168.1.115:4408</code>).</p>
+</div>
 {% endif %}
 {% endblock %}

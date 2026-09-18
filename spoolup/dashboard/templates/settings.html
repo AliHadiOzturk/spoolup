@@ -1,8 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Settings</h1>
-<p class="badge">Restart the application to apply new configuration.</p>
-<div class="grid">
+<p class="badge">Changes save to config.json — restart the application to apply.</p>
   <form class="tb" id="cfgform" onsubmit="return saveConfig(event)">
     {% for key, value in config.items() %}
       {% if key == 'kick_stream_key' %}
@@ -22,11 +21,10 @@
       {% endif %}
     {% endfor %}
   </form>
-</div>
 <div class="actions">
-  <button onclick="saveConfig()">Save</button>
-  <button onclick="probe('test-webcam')">Test webcam</button>
-  <button onclick="probe('test-moonraker')">Test Moonraker</button>
+  <button class="primary" onclick="saveConfig()">Save</button>
+  <button class="ghost" onclick="probe('test-webcam')">Test webcam</button>
+  <button class="ghost" onclick="probe('test-moonraker')">Test Moonraker</button>
 </div>
 <div id="test-result"></div>
 <script>
