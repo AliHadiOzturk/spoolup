@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>SpoolUp</h1>
+<div id="banners"></div>
+<div class="grid">
+  <div class="card" id="print-card">loading…</div>
+  <div class="card" id="stream-card">loading…</div>
+  <div class="card" id="sessions-card">loading…</div>
+  <div class="card" id="updates-card">loading…</div>
+  <div class="card actions">
+    <button id="btn-check">Check now</button>
+    <button id="btn-update">Update now</button>
+  </div>
+</div>
+<div class="actions">
+  <button data-action="stream/start">Start stream</button>
+  <button data-action="stream/stop">Stop stream</button>
+  <button data-action="stream/restart">Restart stream</button>
+</div>
+{% endblock %}
