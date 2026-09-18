@@ -79,3 +79,6 @@ worker/.wrangler/
 worker/dist/
 .cloudflare/.claude/
 .claude/
+
+
+client_secret.json
