@@ -225,7 +225,7 @@ Disable it with `"dashboard_enabled": false` in `config.json`. If the dashboard 
 
 ## 🎵 Music
 
-Open `/music`: upload tracks, build a playlist, pick Silence / Library / Spotify, set volume — all changes apply live without restarting the stream. Spotify requires `librespot` (Spotify Premium): set `librespot_path`, `spotify_username`, `spotify_password` in Settings, press Spotify, then select the "SpoolUp" device in your Spotify app.
+Open `/music`: upload tracks, build a playlist, pick Silence / Library / Spotify, set volume — all changes apply live without restarting the stream. Spotify requires `librespot` (Spotify Premium): set `librespot_path` in Settings, press Spotify, then select the "SpoolUp" device in your Spotify app. No username/password needed — modern Spotify accounts log in through the app (verification code / device confirmation), and the login is cached in `data/spotify-cache` for later sessions.
 
 ## 🛡️ 24/7 Operation
 

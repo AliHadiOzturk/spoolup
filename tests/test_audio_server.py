@@ -147,6 +147,18 @@ def test_librespot_source_spawns_and_reads():
     src.close()
 
 
+def test_librespot_cmd_matches_mode():
+    from spoolup.audio_server import LibrespotSource
+    # zeroconf (default): credentials NOT passed, cache dir passed
+    z = LibrespotSource.build_cmd("/usr/bin/librespot", "", "",
+                                  cache_dir="/cache")
+    assert "--username" not in z and "--cache" in z and "--name" in z
+    # legacy: both creds passed, no cache flag
+    l = LibrespotSource.build_cmd("/usr/bin/librespot", "u", "p",
+                                  cache_dir="/cache")
+    assert "--username" in l and "--password" in l and "--cache" not in l
+
+
 if __name__ == "__main__":
     test_scale_pcm_passthrough_and_clamp()
     test_mix_pcm_endpoints_and_middle()
@@ -154,4 +166,5 @@ if __name__ == "__main__":
     test_audio_server_tcp_roundtrip()
     test_audio_server_reconnect_serves_second_client()
     test_librespot_source_spawns_and_reads()
+    test_librespot_cmd_matches_mode()
     print("test_audio_server: ALL PASS")

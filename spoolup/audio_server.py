@@ -172,18 +172,38 @@ class LibrespotSource(_ProcessSource):
     librespot arguments.
     """
 
-    def __init__(self, librespot_path: str, username: str, password: str,
-                 device_name: str = "SpoolUp", argv_override=None):
-        super().__init__()
-        self._eof = False
-        self.name = "spotify"
-        cmd = ([librespot_path] + list(argv_override)) if argv_override else [
+    @staticmethod
+    def build_cmd(librespot_path: str, username: str, password: str,
+                  device_name: str = "SpoolUp", cache_dir: str = "",
+                  argv_override=None):
+        if argv_override:
+            return [librespot_path] + list(argv_override)
+        cmd = [
             librespot_path,
             "--name", device_name,
             "--backend", "pipe",
-            "--username", username,
-            "--password", password,
         ]
+        if username and password:
+            cmd += ["--username", username, "--password", password]
+        elif cache_dir:
+            cmd += ["--cache", cache_dir]
+        return cmd
+
+    def __init__(self, librespot_path: str,
+                 username: str = "", password: str = "",
+                 device_name: str = "SpoolUp",
+                 cache_dir: str = "", argv_override=None):
+        """Modern Spotify accounts log in via the app's verification code,
+        so by default the source runs in ZEROCONF (Spotify Connect) mode:
+        no credentials are passed, the user selects the device in their
+        Spotify app, and the login is cached in ``cache_dir`` for later
+        sessions. If BOTH username and password are given (legacy librespot
+        builds that still support password auth), they are used instead."""
+        super().__init__()
+        self._eof = False
+        self.name = "spotify"
+        cmd = self.build_cmd(librespot_path, username, password,
+                             device_name, cache_dir, argv_override)
         try:
             self._start(cmd)
         except FileNotFoundError:

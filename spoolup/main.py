@@ -2686,19 +2686,23 @@ This timelapse was automatically generated using Moonraker Timelapse plugin and 
         path = self.config.get("librespot_path") or ""
         user = self.config.get("spotify_username") or ""
         password = self.config.get("spotify_password") or ""
-        if not (path and user and password):
-            logger.error(
-                "Spotify source requested but librespot_path/username/password "
-                "are not configured"
-            )
+        if not path:
+            logger.error("Spotify source requested but librespot_path is empty")
             if self.dashboard_ctx is not None:
                 self.dashboard_ctx.add_banner(
-                    "Spotify not configured — set librespot_path + credentials in Settings"
+                    "Spotify not configured — set librespot_path in Settings"
                 )
             return
-        src = LibrespotSource(path, user, password)
+        data_dir = self.config.get("data_dir") or "data"
+        cache_dir = os.path.join(data_dir, "spotify-cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        src = LibrespotSource(
+            path,
+            username=user, password=password,
+            cache_dir=cache_dir,
+        )
         if src.exhausted():
-            logger.error("librespot could not start; staying on silence")
+            logger.error("librespot failed to start (kept the current source)")
             if self.dashboard_ctx is not None:
                 self.dashboard_ctx.add_banner(
                     "librespot failed to start — check librespot_path"
