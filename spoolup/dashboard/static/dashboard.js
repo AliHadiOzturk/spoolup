@@ -70,6 +70,19 @@ function renderPrint(card, p) {
 
 /* ---------- stream card ---------- */
 
+function linkRow(k, text, href) {
+  const r = el("div", "row");
+  r.appendChild(el("span", "k", k));
+  const v = el("span", "v");
+  const a = el("a", null, text);
+  a.href = href;
+  a.target = "_blank";
+  a.rel = "noopener";
+  v.appendChild(a);
+  r.appendChild(v);
+  return r;
+}
+
 function chipRow(k, value, chipState) {
   const r = el("div", "row");
   r.appendChild(el("span", "k", k));
@@ -110,9 +123,10 @@ function renderStream(card, s) {
   }
   const kick = sinks.kick || null;
   if (kick) {
-    const label = kick.up ? "receiving"
-        : kick.configured ? "idle" : "not configured";
+    const label = kick.up ? "receiving" : "not configured";
     body.appendChild(rowPair("kick", label, kick.up ? "ok" : "idle"));
+    if (kick.channel) body.appendChild(linkRow("kick channel",
+        "open your Kick page", kick.channel));
   }
   if (s.pump && s.pump.read_rate !== null && s.pump.read_rate !== undefined) {
     body.appendChild(rowPair("webcam feed",

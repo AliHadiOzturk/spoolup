@@ -1,0 +1,20 @@
+{# Single-page shell: all panes live in one DOM so the Mainsail iframe
+   (and any other state) survives tab switches without reloading. #}
+{% extends "base.html" %}
+{% block content %}
+<section class="pane" data-pane="dashboard" {% if initial != 'dashboard' %}hidden{% endif %}>
+  {% include "dashboard.html" %}
+</section>
+<section class="pane" data-pane="printer" {% if initial != 'printer' %}hidden{% endif %}>
+  {% include "printer.html" %}
+</section>
+<section class="pane" data-pane="music" {% if initial != 'music' %}hidden{% endif %}>
+  {% include "music.html" %}
+</section>
+<section class="pane" data-pane="settings" {% if initial != 'settings' %}hidden{% endif %}>
+  {% include "settings.html" %}
+</section>
+<section class="pane" data-pane="logs" {% if initial != 'logs' %}hidden{% endif %}>
+  {% include "logs.html" %}
+</section>
+{% endblock %}

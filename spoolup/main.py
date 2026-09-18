@@ -90,6 +90,7 @@ class Config:
         "kick_enabled": False,
         "kick_rtmp_url": "rtmp://fa723fc1b91d4.global-media-services.com:1935/live",
         "kick_stream_key": "",
+        "kick_channel_url": "https://kick.com/alihadiozturk",
         "ingest_buffer_seconds": 10,
         "dashboard_enabled": True,
         "dashboard_host": "127.0.0.1",

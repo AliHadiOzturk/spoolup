@@ -1,5 +1,3 @@
-{% extends "base.html" %}
-{% block content %}
 <h1>Settings</h1>
 <p class="badge">Changes save to config.json — restart the application to apply.</p>
   <form class="tb" id="cfgform" onsubmit="return saveConfig(event)">
@@ -59,4 +57,3 @@ async function probe(kind) {
       (await r.json()).ok ? "OK" : "FAILED";
 }
 </script>
-{% endblock %}

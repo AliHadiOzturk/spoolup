@@ -33,7 +33,7 @@ KNOWN_KEYS = {
     "youtube_category_id", "video_privacy", "stream_privacy",
     "enable_live_stream", "enable_timelapse_upload", "retry_attempts",
     "retry_delay", "disable_ssl_verify", "kick_enabled", "kick_rtmp_url",
-    "kick_stream_key", "ingest_buffer_seconds",
+    "kick_stream_key", "kick_channel_url", "ingest_buffer_seconds",
     "dashboard_enabled", "dashboard_host", "dashboard_port",
     "watchdog_interval", "auto_update_interval_h", "auto_update_enabled",
     "audio_server_enabled", "audio_default_volume", "data_dir",
@@ -76,23 +76,33 @@ def create_app(ctx) -> FastAPI:
             return {"sessions": []}
         return {"sessions": ctx.sessions.list_recent(50)}
 
+    def _render_app(request: Request, initial: str):
+        """Single-page shell: every route serves the app; `initial` picks
+        the pane, and the others stay in the DOM (Mainsail iframe and other
+        state survive tab switches)."""
+        return render(
+            request,
+            "app.html",
+            initial=initial,
+            needs_wizard=False,
+            config=ctx.mask_config(ctx.config_values()),
+            int_keys=INT_KEYS,
+            mainsail_url=ctx.config_values().get("mainsail_url") or "",
+        )
+
     @app.get("/", response_class=HTMLResponse)
     def page_dashboard(request: Request):
         if _need_wizard():
             return render(request, "wizard.html", **_wizard_env())
-        return render(request, "dashboard.html", needs_wizard=False)
+        return _render_app(request, "dashboard")
 
     @app.get("/logs", response_class=HTMLResponse)
     def page_logs(request: Request):
-        return render(request, "logs.html")
+        return _render_app(request, "logs")
 
     @app.get("/settings", response_class=HTMLResponse)
     def page_settings(request: Request):
-        if _need_wizard():
-            return render(request, "wizard.html", **_wizard_env())
-        return render(request, "settings.html",
-                      config=ctx.mask_config(ctx.config_values()),
-                      int_keys=INT_KEYS)
+        return _render_app(request, "settings")
 
     @app.post("/api/wizard/token")
     async def wizard_token(request: Request):
@@ -234,7 +244,7 @@ def create_app(ctx) -> FastAPI:
 
     @app.get("/music", response_class=HTMLResponse)
     def page_music(request: Request):
-        return render(request, "music.html")
+        return _render_app(request, "music")
 
     @app.get("/api/update/status")
     def api_update_status():
@@ -258,7 +268,6 @@ def create_app(ctx) -> FastAPI:
 
     @app.get("/printer", response_class=HTMLResponse)
     def page_printer(request: Request):
-        mainsail_url = ctx.config_values().get("mainsail_url") or ""
-        return render(request, "printer.html", mainsail_url=mainsail_url)
+        return _render_app(request, "printer")
 
     return app

@@ -180,6 +180,7 @@ class RuntimeContext:
                     "kick": {
                         "configured": bool(self._config_get("kick_enabled")),
                         "up": kick_up,
+                        "channel": self._config_get("kick_channel_url") or "",
                     },
                 },
                 "pump": pump_doc,
