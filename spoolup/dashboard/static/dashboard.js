@@ -128,6 +128,12 @@ function renderStream(card, s) {
     if (kick.channel) body.appendChild(linkRow("kick channel",
         "open your Kick page", kick.channel));
   }
+  if (s.encode_speed !== null && s.encode_speed !== undefined
+      && s.is_streaming) {
+    const pct = Math.round(s.encode_speed * 100);
+    body.appendChild(chipRow("encode speed",
+        pct + "% realtime", pct >= 100 ? "ok" : "bad"));
+  }
   if (s.pump && s.pump.read_rate !== null && s.pump.read_rate !== undefined) {
     body.appendChild(rowPair("webcam feed",
         s.pump.read_rate.toFixed(1) + " fps", null));

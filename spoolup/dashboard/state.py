@@ -184,6 +184,8 @@ class RuntimeContext:
                     },
                 },
                 "pump": pump_doc,
+                "encode_speed": getattr(streamer, "encode_speed", None)
+                if streamer is not None else None,
             },
             "uptime_seconds": int(time.time() - self._start_time),
             "banners": list(self.banners),

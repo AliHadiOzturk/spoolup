@@ -676,6 +676,7 @@ class StreamManager:
         self._ffmpeg_monitor_thread = None
         self._description_update_thread = None
         self.frame_pump: Optional[FramePump] = None
+        self.encode_speed: Optional[float] = None
         self.audio_server = None
         # Ownership transfer hooks (set by SpoolUp): provider steals the
         # standby AudioServer when spawning; on_kill_audio reclaims it when
@@ -1858,6 +1859,12 @@ class StreamManager:
                         break
                     text = line.decode("utf-8", "replace").strip()
                     if text:
+                        m = re.search(r"speed=\s*([0-9.]+)x", text)
+                        if m:
+                            try:
+                                self.encode_speed = float(m.group(1))
+                            except ValueError:
+                                pass
                         logger.info(f"FFmpeg: {self._masked_text(text)}")
             except Exception as e:
                 logger.debug(f"FFmpeg stderr logger exited: {e}")
