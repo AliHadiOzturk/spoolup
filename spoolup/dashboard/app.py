@@ -174,7 +174,7 @@ def create_app(ctx) -> FastAPI:
             banner = ("Configuration saved — "
                       "restart the application to apply.")
             if banner not in ctx.banners:
-                ctx.banners.append(banner)
+                ctx.add_banner(banner)
         return {"ok": ok}
 
     @app.post("/api/config/test-webcam")

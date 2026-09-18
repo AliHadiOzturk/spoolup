@@ -124,13 +124,15 @@ class Config:
             except Exception as e:
                 logger.error(f"Failed to load config: {e}")
 
-    def save(self):
+    def save(self) -> bool:
         try:
             with open(self.config_file, "w") as f:
                 json.dump(self.values, f, indent=2)
             logger.info(f"Configuration saved to {self.config_file}")
+            return True
         except Exception as e:
             logger.error(f"Failed to save config: {e}")
+            return False
 
     def get(self, key: str, default=None):
         return self.values.get(key, default)
@@ -173,8 +175,10 @@ def build_dashboard_context(su: "SpoolUp") -> "RuntimeContext":
         config_keys=list(su.config.values.keys()),
         secret_keys=["kick_stream_key", "spotify_password"],
         config_file=su.config.config_file,
-        save_config=lambda values: (su.config.set_many(values),
-                                    su.config.save()),
+        save_config=lambda values: (
+            su.config.set_many(values),
+            su.config.save(),
+        )[-1],
         test_moonraker=_probe_moonraker,
         test_webcam=_probe_webcam,
     )
@@ -1997,9 +2001,18 @@ class SpoolUp:
     def _is_streaming_now(self) -> bool:
         return bool(self.streamer is not None and self.streamer.is_streaming)
 
+    @staticmethod
+    def failed_steps_check(applied: Dict[str, Any]):
+        steps = applied.get("steps") or []
+        for step in steps if False else steps:
+            if step.get("rc") not in (0, None):
+                return step
+        return None
+
     def _banner(self, msg: str) -> None:
-        if self.dashboard_ctx is not None:
-            self.dashboard_ctx.banners.append(msg)
+        ctx = getattr(self, "dashboard_ctx", None)
+        if ctx is not None:
+            ctx.add_banner(msg)
         logger.warning(msg)
 
     def _start_update_checker(self) -> None:
@@ -2061,7 +2074,14 @@ class SpoolUp:
             applied = self.updater.apply()
             self.updater.set_state(last_apply=applied)
             if not applied.get("ok"):
-                self._banner("update failed: %s" % applied.get("error"))
+                tail = ""
+                failed_steps = [s for s in applied.get("steps", []) if s.get("rc") != 0]
+                if failed_steps_check(applied):
+                    tail = failed_steps_check(applied).get("tail", "")[-160:]
+                    self._banner("update failed: %s — %s"
+                                 % (applied.get("error"), tail))
+                else:
+                    self._banner("update failed: %s" % applied.get("error"))
                 return
             self._stage_restart_if_needed(applied)
         finally:
@@ -2639,7 +2659,7 @@ This timelapse was automatically generated using Moonraker Timelapse plugin and 
                         )
                         src.close()
                         if self.dashboard_ctx is not None:
-                            self.dashboard_ctx.banners.append(
+                            self.dashboard_ctx.add_banner(
                                 "Audio decode failed for the selected track "
                                 "— check ffmpeg and the file."
                             )
@@ -2672,7 +2692,7 @@ This timelapse was automatically generated using Moonraker Timelapse plugin and 
                 "are not configured"
             )
             if self.dashboard_ctx is not None:
-                self.dashboard_ctx.banners.append(
+                self.dashboard_ctx.add_banner(
                     "Spotify not configured — set librespot_path + credentials in Settings"
                 )
             return
@@ -2680,7 +2700,7 @@ This timelapse was automatically generated using Moonraker Timelapse plugin and 
         if src.exhausted():
             logger.error("librespot could not start; staying on silence")
             if self.dashboard_ctx is not None:
-                self.dashboard_ctx.banners.append(
+                self.dashboard_ctx.add_banner(
                     "librespot failed to start — check librespot_path"
                 )
             src.close()
@@ -2689,7 +2709,7 @@ This timelapse was automatically generated using Moonraker Timelapse plugin and 
         if self.playlist_state is not None:
             self.playlist_state.save({"source": "spotify"})
         if self.dashboard_ctx is not None:
-            self.dashboard_ctx.banners.append(
+            self.dashboard_ctx.add_banner(
                 "Spotify source active — select 'SpoolUp' as the playback "
                 "device in your Spotify app"
             )
@@ -2755,7 +2775,11 @@ This timelapse was automatically generated using Moonraker Timelapse plugin and 
         def check_audio():
             if not self.config.get("audio_server_enabled", True):
                 return None
+            if not self._is_streaming_now():
+                return None
             srv = self._current_audio_server()
+            if srv is None:
+                return None
             if srv is None:
                 return None
             snap = srv.snapshot()

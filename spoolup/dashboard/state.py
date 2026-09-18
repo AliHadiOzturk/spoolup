@@ -201,6 +201,12 @@ class RuntimeContext:
         return doc
 
     # ------- logs -------
+    def add_banner(self, message: str) -> None:
+        if message in self.banners:
+            return
+        self.banners.append(message)
+        del self.banners[: max(0, len(self.banners) - 20)]
+
     def logs(self, limit: int = 200) -> List[str]:
         return self.log_handler.tail(limit)
 

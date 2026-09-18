@@ -11,6 +11,10 @@ class FakeCtx:
     def __init__(self):
         self.banners = []
 
+    def add_banner(self, message):
+        if message not in self.banners:
+            self.banners.append(message)
+
 
 def _make_spoolup(live=False):
     from spoolup.main import SpoolUp
