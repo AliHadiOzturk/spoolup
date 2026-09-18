@@ -1,9 +1,7 @@
-{% extends "base.html" %}
-{% block content %}
 <h1>Printer</h1>
 {% if mainsail_url %}
 <div class="iframe-wrap">
-  <iframe src="{{ mainsail_url }}" title="Mainsail printer interface"></iframe>
+  <iframe id="mainsail-iframe" data-src="{{ mainsail_url }}" title="Mainsail printer interface"></iframe>
 </div>
 {% else %}
 <div class="card">
@@ -14,4 +12,3 @@
   <p class="hint" style="margin:4px 0 10px">Set <code>mainsail_url</code> in Settings to embed Mainsail here (e.g. <code>http://192.168.1.115:4408</code>).</p>
 </div>
 {% endif %}
-{% endblock %}
