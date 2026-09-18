@@ -91,6 +91,22 @@ class Config:
         "kick_rtmp_url": "rtmp://fa723fc1b91d4.global-media-services.com:1935/live",
         "kick_stream_key": "",
         "ingest_buffer_seconds": 10,
+        "dashboard_enabled": True,
+        "dashboard_host": "127.0.0.1",
+        "dashboard_port": 8007,
+        "audio_server_enabled": True,
+        "audio_default_volume": 0.8,
+        "data_dir": "data",
+        "librespot_path": "",
+        "spotify_username": "",
+        "spotify_password": "",
+        "spotify_playlist_uri": "",
+        "mainsail_url": "",
+        "watchdog_interval": 30,
+        "keep_stream_on_error": True,
+        "auto_update_enabled": True,
+        "auto_update_interval_h": 2,
+        "log_file": "data/spoolup.log",
     }
 
     def __init__(self, config_file: str = "config.json"):
@@ -121,10 +137,56 @@ class Config:
     def set(self, key: str, value: Any):
         self.values[key] = value
 
+    def set_many(self, values: Dict[str, Any]) -> None:
+        self.values.update(values)
+
+
+def build_dashboard_context(su: "SpoolUp") -> "RuntimeContext":
+    """Build the framework-free bridge the dashboard talks through."""
+    from spoolup.dashboard.state import RuntimeContext as _RTC
+
+    def _probe_webcam(url: str) -> bool:
+        if not url:
+            return False
+        try:
+            resp = requests.get(url, stream=True, timeout=(5, 10))
+            if resp.status_code != 200:
+                return False
+            return bool(next(resp.iter_content(chunk_size=1024), None))
+        except Exception:
+            return False
+
+    def _probe_moonraker(url: str) -> bool:
+        if not url:
+            return False
+        try:
+            probe_url = url.rstrip("/") + "/server/info"
+            resp = requests.get(probe_url, timeout=5)
+            return resp.ok
+        except Exception:
+            return False
+
+    return _RTC(
+        runtime=su,
+        config_get=su.config.get,
+        config_keys=list(su.config.values.keys()),
+        secret_keys=["kick_stream_key", "spotify_password"],
+        config_file=su.config.config_file,
+        save_config=lambda values: (su.config.set_many(values),
+                                    su.config.save()),
+        test_moonraker=_probe_moonraker,
+        test_webcam=_probe_webcam,
+    )
+
 
 class MoonrakerClient:
-    def __init__(self, base_url: str):
+    def __init__(
+        self,
+        base_url: str,
+        on_error_state: Optional[Callable[[], None]] = None,
+    ):
         self.base_url = base_url.rstrip("/")
+        self.on_error_state = on_error_state
         self.ws = None
         self.ws_url = (
             base_url.replace("http://", "ws://").replace("https://", "wss://")
@@ -328,6 +390,11 @@ class MoonrakerClient:
                         logger.warning(
                             "Print error detected - stream continuing. Waiting for recovery or completion..."
                         )
+                        if self.on_error_state is not None:
+                            try:
+                                self.on_error_state()
+                            except Exception as e:
+                                logger.error("on_error_state handler failed: %s", e)
 
         self._extract_temperatures(status)
         self._extract_display_status(status)
@@ -601,8 +668,21 @@ class StreamManager:
         self.is_streaming = False
         self.display_title: Optional[str] = None
         self._health_check_thread = None
+        self._ffmpeg_monitor_thread = None
         self._description_update_thread = None
         self.frame_pump: Optional[FramePump] = None
+        self.audio_server = None
+        # Ownership transfer hooks (set by SpoolUp): provider steals the
+        # standby AudioServer when spawning; on_kill_audio reclaims it when
+        # the pipeline dies (music survives stream stop). When unset, the
+        # Task-3 behavior applies: create fresh on spawn, stop() on kill.
+        self.audio_server_provider: Optional[Callable] = None
+        self.on_kill_audio: Optional[Callable] = None
+        self._stopping = False
+        self._ffmpeg_died_unexpectedly = False
+        # Set by SpoolUp: called when the monitor detects an unexpected ffmpeg
+        # death (used to add a dashboard banner).
+        self.on_ffmpeg_death: Optional[Callable[[], None]] = None
 
     def _check_ffmpeg_available(self) -> bool:
         """Check if FFmpeg is installed and available in PATH."""
@@ -722,13 +802,27 @@ class StreamManager:
             )
         return "|".join(parts)
 
-    def _build_ffmpeg_cmd(self, webcam_url: str) -> List[str]:
+    def _build_ffmpeg_cmd(self, webcam_url: str,
+                          audio_port: Optional[int] = None) -> List[str]:
         """Build FFmpeg command with optimal settings for YouTube streaming."""
         resolution = self.config.get("stream_resolution") or "1280x720"
         fps: int = self.config.get("stream_fps") or 30
         bitrate: str = self.config.get("stream_bitrate") or "4000k"
         buffer_size: str = self.config.get("stream_buffer_size") or "8000k"
         encoder = self._detect_h264_encoder()
+
+        # Audio input: live PCM feed from AudioServer when available,
+        # otherwise the legacy silent source (required by YouTube).
+        if audio_port:
+            audio_input = [
+                "-f", "s16le", "-ar", "44100", "-ac", "2",
+                "-i", "tcp://127.0.0.1:%d" % audio_port,
+            ]
+        else:
+            audio_input = [
+                "-f", "lavfi",
+                "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+            ]
 
         # YouTube prefers 2-second GOP (Group of Pictures)
         gop_size = fps * 2
@@ -772,12 +866,16 @@ class StreamManager:
             "-hide_banner",
             "-loglevel", "warning",
             "-stats",
-            # Input: MJPEG frames fed by FramePump over stdin
-            "-f", "mjpeg",
+            # Input: MJPEG frames fed by FramePump over stdin.
+            # -framerate MUST match the pump's pacing (stream_fps): the raw
+            # mjpeg demuxer assumes 25fps otherwise and the output timeline
+            # drifts progressively behind realtime on long prints.
+            "-f", "image2pipe",
+            "-framerate", str(fps),
+            "-c:v", "mjpeg",
             "-i", "pipe:0",
-            # Silent audio source (required by YouTube)
-            "-f", "lavfi",
-            "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+            # Audio input (live AudioServer feed, or silent anullsrc fallback)
+            *audio_input,
             # Video filter: enforce framerate, scale, ensure YUV420P for compatibility
             "-filter_complex",
             f"[0:v]fps={fps}:round=down,scale={resolution},format=yuv420p[v]",
@@ -817,7 +915,47 @@ class StreamManager:
             pump.stop()
             return False
 
-        cmd = self._build_ffmpeg_cmd(webcam_url)
+        audio_port = None
+        if self.config.get("audio_server_enabled", True):
+            # Re-entered without _kill_ffmpeg (encoder retry / failed start):
+            # reclaim the previously adopted server before making a new one.
+            if self.audio_server is not None:
+                if self.on_kill_audio is not None:
+                    try:
+                        self.on_kill_audio(self.audio_server)
+                    except Exception as e:
+                        logger.error("on_kill_audio failed, stopping server: %s", e)
+                        self.audio_server.stop()
+                else:
+                    self.audio_server.stop()
+                self.audio_server = None
+            # Adopt the standby server (source/volume configured from the
+            # dashboard persist across stream start) or create a fresh one.
+            server = None
+            if self.audio_server_provider is not None:
+                try:
+                    server = self.audio_server_provider()
+                except Exception as e:
+                    logger.error("audio_server_provider failed: %s", e)
+                    server = None
+            if server is None:
+                try:
+                    from spoolup.audio_server import AudioServer
+                    server = AudioServer(
+                        volume=float(self.config.get("audio_default_volume", 0.8) or 0.8)
+                    )
+                except Exception as e:
+                    logger.error("AudioServer init failed, silent audio: %s", e)
+                    server = None
+            if server is not None:
+                try:
+                    audio_port = server.start()
+                    self.audio_server = server
+                except Exception as e:
+                    logger.error("AudioServer start failed, silent audio: %s", e)
+                    self.audio_server = None
+                    audio_port = None
+        cmd = self._build_ffmpeg_cmd(webcam_url, audio_port=audio_port)
         self._last_cmd = cmd
         self._last_webcam_url = webcam_url
         self._log_ffmpeg_command(cmd, "Starting FFmpeg stream")
@@ -886,6 +1024,18 @@ class StreamManager:
             self._detect_h264_encoder = original_detect
 
     def _kill_ffmpeg(self) -> None:
+        if self.audio_server is not None:
+            if self.on_kill_audio is not None:
+                # Hand the live server back to SpoolUp's standby slot so
+                # music survives stream stop (24/7 radio-style behavior).
+                try:
+                    self.on_kill_audio(self.audio_server)
+                except Exception as e:
+                    logger.error("on_kill_audio failed, stopping server: %s", e)
+                    self.audio_server.stop()
+            else:
+                self.audio_server.stop()
+            self.audio_server = None
         if self.frame_pump is not None:
             self.frame_pump.stop()
             self.frame_pump = None
@@ -1442,34 +1592,55 @@ class StreamManager:
 
         logger.info("Health check loop ended")
 
-    def _restart_ffmpeg_stream(self):
+    def _restart_ffmpeg_stream(self) -> bool:
+        """Kill and respawn the ffmpeg pipeline in place.
+
+        On success restores streaming state (is_streaming=True) and restarts
+        the ffmpeg/health monitor threads (the old monitor thread already
+        exited — it cleared is_streaming when it detected the death).
+
+        Returns True when the pipeline was respawned and state restored,
+        False otherwise.
+        """
         logger.warning("Restarting FFmpeg stream due to ingestion starvation")
+        self._stopping = True
         try:
-            self._kill_ffmpeg()
-        except Exception as e:
-            logger.error(f"Failed to stop old pipeline: {e}")
-        time.sleep(3)
-        try:
-            # Reload config to pick up any changes
-            self.config.load()
+            try:
+                self._kill_ffmpeg()
+            except Exception as e:
+                logger.error(f"Failed to stop old pipeline: {e}")
+            time.sleep(3)
+            try:
+                # Reload config to pick up any changes
+                self.config.load()
 
-            webcam_url = (
-                self.config.get("webcam_url") or "http://localhost:8080/?action=stream"
-            )
-            logger.info("Restarting FFmpeg with fresh connection")
+                webcam_url = (
+                    self.config.get("webcam_url") or "http://localhost:8080/?action=stream"
+                )
+                logger.info("Restarting FFmpeg with fresh connection")
 
-            if not self.stream_url:
-                logger.error("Cannot restart - no stream URL available")
-                return
+                if not self.stream_url:
+                    logger.error("Cannot restart - no stream URL available")
+                    return False
 
-            if not self._spawn_pipeline(webcam_url):
-                logger.error("FFmpeg restart failed")
-                return
-            logger.info("FFmpeg pipeline restarted successfully")
-        except Exception as e:
-            logger.error(f"Failed to restart FFmpeg stream: {e}")
+                if not self._spawn_pipeline(webcam_url):
+                    logger.error("FFmpeg restart failed")
+                    return False
+                logger.info("FFmpeg pipeline restarted successfully")
+                self.is_streaming = True
+                self._start_ffmpeg_monitor()
+                if self.live_stream:
+                    self._start_health_monitor()
+                return True
+            except Exception as e:
+                logger.error(f"Failed to restart FFmpeg stream: {e}")
+                return False
+        finally:
+            self._stopping = False
 
     def _start_health_monitor(self):
+        if self._health_check_thread is not None and self._health_check_thread.is_alive():
+            return
         self._health_check_thread = threading.Thread(target=self._health_check_loop)
         self._health_check_thread.daemon = True
         self._health_check_thread.start()
@@ -1653,11 +1824,20 @@ class StreamManager:
                             logger.error(f"FFmpeg stderr: {self._masked_text(text)}")
                     except:
                         pass
+                if not self._stopping:
+                    self._ffmpeg_died_unexpectedly = True
+                    if self.on_ffmpeg_death is not None:
+                        try:
+                            self.on_ffmpeg_death()
+                        except Exception as e:
+                            logger.error(f"on_ffmpeg_death callback failed: {e}")
                 self.is_streaming = False
                 break
         logger.info("FFmpeg monitor stopped")
 
     def _start_ffmpeg_monitor(self):
+        if self._ffmpeg_monitor_thread is not None and self._ffmpeg_monitor_thread.is_alive():
+            return
         self._ffmpeg_monitor_thread = threading.Thread(target=self._ffmpeg_monitor_loop)
         self._ffmpeg_monitor_thread.daemon = True
         self._ffmpeg_monitor_thread.start()
@@ -1703,6 +1883,7 @@ class StreamManager:
         import traceback
 
         logger.warning(f"stop_streaming() called from:\n{traceback.format_stack()[-3]}")
+        self._stopping = True
         try:
             if self.live_broadcast:
                 delay = 15
@@ -1717,6 +1898,8 @@ class StreamManager:
 
         except Exception as e:
             logger.error(f"Error stopping stream: {e}")
+        finally:
+            self._stopping = False
 
     def get_watch_url(self) -> Optional[str]:
         if self.live_broadcast:
@@ -1794,6 +1977,128 @@ class SpoolUp:
         self.uploader = None
         self.print_start_time = None
         self.timelapse_file = None
+        self.dashboard_thread = None
+        self.dashboard_ctx = None
+        self._action_thread = None
+        self.standby_audio = None
+        self.audio_library = None
+        self.playlist_state = None
+        self.session_store = None
+        self._active_session_id = None
+        self.watchdog = None
+        self.updater: Optional["Updater"] = None
+        self._update_checker_thread = None
+        self._pending_restart = False
+        self._update_runner_lock = threading.Lock()
+        self._update_running = False
+        self._stop = False
+
+    def _is_streaming_now(self) -> bool:
+        return bool(self.streamer is not None and self.streamer.is_streaming)
+
+    def _banner(self, msg: str) -> None:
+        if self.dashboard_ctx is not None:
+            self.dashboard_ctx.banners.append(msg)
+        logger.warning(msg)
+
+    def _start_update_checker(self) -> None:
+        data_dir = self.config.get("data_dir") or "data"
+        from spoolup.updater import Updater
+
+        self.updater = Updater(
+            repo_root=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            state_path=os.path.join(data_dir, "update_state.json"),
+        )
+        if self.updater.get_state().get("pending_restart"):
+            self._pending_restart = True
+        if self.dashboard_ctx is not None:
+            self.dashboard_ctx.updater = self.updater
+            self.dashboard_ctx.get_update_status = self._get_update_status
+        if not self.config.get("auto_update_enabled", True):
+            logger.info("Auto-update checker disabled; manual updates still available")
+            return
+
+        def checker():
+            time.sleep(60)  # boot grace
+            while True:
+                try:
+                    self._auto_update_once()
+                except Exception as e:
+                    logger.error("auto-update sweep failed: %s", e)
+                hours = float(self.config.get("auto_update_interval_h", 2) or 2)
+                time.sleep(max(0.25, hours) * 3600)
+
+        self._update_checker_thread = threading.Thread(
+            target=checker, daemon=True, name="spoolup-updates"
+        )
+        self._update_checker_thread.start()
+        logger.info("Auto-update checker started (interval=%sh)",
+                    self.config.get("auto_update_interval_h", 2))
+
+    def _get_update_status(self) -> Dict[str, Any]:
+        state = self.updater.get_state() if self.updater is not None else {}
+        return {
+            "pending_restart": self._pending_restart,
+            "last_check": state.get("last_check"),
+            "last_apply": state.get("last_apply"),
+            "auto_update_enabled": bool(self.config.get("auto_update_enabled", True)),
+        }
+
+    def _auto_update_once(self) -> None:
+        if self.updater is None or self._update_running:
+            return
+        with self._update_runner_lock:
+            if self._update_running:
+                return
+            self._update_running = True
+        try:
+            check = self.updater.check()
+            self.updater.set_state(last_check=check)
+            if not check.get("ok") or not check.get("ahead_by"):
+                return
+            logger.info("Auto-update: %d new commit(s) available", check["ahead_by"])
+            applied = self.updater.apply()
+            self.updater.set_state(last_apply=applied)
+            if not applied.get("ok"):
+                self._banner("update failed: %s" % applied.get("error"))
+                return
+            self._stage_restart_if_needed(applied)
+        finally:
+            self._update_running = False
+
+    def _stage_restart_if_needed(self, applied: Dict[str, Any]) -> None:
+        if not applied.get("changed") and not self._pending_restart:
+            return
+        if self._is_streaming_now():
+            self._pending_restart = True
+            self.updater.set_state(pending_restart=True)
+            self._banner("update staged — will restart when the stream ends")
+            logger.info("Update staged; restart deferred until stream end")
+        else:
+            self.restart_app()
+
+    def _maybe_restart_pending(self) -> None:
+        if not self._pending_restart:
+            return
+        if self._is_streaming_now():
+            return
+        logger.info("Stream ended — executing deferred update restart")
+        self.restart_app()
+
+    def restart_app(self) -> None:
+        logger.warning("Restarting application to apply update...")
+        if self.updater is not None:
+            self.updater.set_state(pending_restart=False)
+        self._pending_restart = False
+        argv = [sys.executable, "-m", "spoolup", "-c",
+                self.config.config_file]
+        logger.info("exec: %s", " ".join(argv))
+        try:
+            if self.streamer is not None and self.streamer.is_streaming:
+                self.streamer.stop_streaming()
+        except Exception as e:
+            logger.error("stop before restart failed: %s", e)
+        os.execv(sys.executable, argv)
 
     def load_youtube_credentials(self) -> bool:
         """Load existing YouTube credentials from token file.
@@ -1868,6 +2173,12 @@ class SpoolUp:
 
             if self.config.get("enable_live_stream", True):
                 self.streamer = StreamManager(self.config, self.youtube)
+                self.streamer.audio_server_provider = self._adopt_standby_audio
+                self.streamer.on_kill_audio = self._reclaim_audio_server
+                if self.watchdog is not None:
+                    self.streamer.on_ffmpeg_death = lambda: self.watchdog.add_banner(
+                        "watchdog: ffmpeg died unexpectedly — restart pending"
+                    )
             if self.config.get("enable_timelapse_upload", True):
                 self.uploader = YouTubeUploader(self.config, self.youtube)
 
@@ -1883,6 +2194,7 @@ class SpoolUp:
     def on_print_started(self, filename: str):
         self.print_start_time = datetime.now(timezone.utc)
         logger.info(f"Print started at {self.print_start_time}")
+        self._record_session_start(filename)
 
         if self.config.get("enable_live_stream", True) and self.streamer:
             # Fetch print statistics for broadcast description
@@ -1915,6 +2227,7 @@ class SpoolUp:
 
     def on_print_completed(self, filename: str):
         logger.info("Print completed")
+        session_id = self._active_session_id
 
         if self.config.get("enable_live_stream", True) and self.streamer:
             if self.streamer.is_streaming:
@@ -1935,9 +2248,16 @@ class SpoolUp:
                 if video_url:
                     logger.info(f"Timelapse uploaded: {video_url}")
                     self._send_notification(f"Timelapse uploaded: {video_url}")
+                    self._record_session_upload(session_id, True, video_url)
+                else:
+                    self._record_session_upload(session_id, False, "upload failed")
             else:
                 logger.error(f"Timelapse file not found for: {filename}")
                 logger.error(f"Check timelapse_dir config: {self.config.get('timelapse_dir')}")
+                self._record_session_upload(session_id, False, "timelapse not found")
+
+        self._record_session_end("complete")
+        self._maybe_restart_pending()
 
     def on_print_cancelled(self, filename: str):
         logger.info("Print cancelled")
@@ -1945,6 +2265,46 @@ class SpoolUp:
         if self.config.get("enable_live_stream", True) and self.streamer:
             if self.streamer.is_streaming:
                 self.streamer.stop_streaming()
+
+        self._record_session_end("cancelled")
+        self._maybe_restart_pending()
+
+    def _platforms(self) -> List[str]:
+        platforms = ["youtube"]
+        if self.config.get("kick_enabled"):
+            platforms.append("kick")
+        return platforms
+
+    def _record_session_start(self, filename: str) -> None:
+        if self.session_store is None:
+            return
+        try:
+            self._active_session_id = self.session_store.record_start(
+                filename,
+                datetime.now(timezone.utc).isoformat(),
+                self._platforms(),
+            )
+        except Exception as e:
+            logger.error("session record_start failed: %s", e)
+
+    def _record_session_end(self, outcome: str) -> None:
+        if self.session_store is None or self._active_session_id is None:
+            return
+        try:
+            self.session_store.record_end(self._active_session_id, outcome)
+        except Exception as e:
+            logger.error("session record_end failed: %s", e)
+        self._active_session_id = None
+
+    def _record_session_upload(
+        self, session_id: Optional[int], ok: bool, detail: str
+    ) -> None:
+        if self.session_store is None or session_id is None:
+            return
+        try:
+            self.session_store.record_upload(session_id, ok, detail)
+        except Exception as e:
+            logger.error("session record_upload failed: %s", e)
 
     def _find_timelapse(self, filename: str) -> Optional[str]:
         timelapse_mode = self.config.get("timelapse_mode", "local")
@@ -2092,18 +2452,396 @@ This timelapse was automatically generated using Moonraker Timelapse plugin and 
         except:
             pass
 
+    def _start_dashboard(self) -> None:
+        # Audio init must run even when the dashboard is disabled: the
+        # action worker handlers and the standby server depend on it.
+        try:
+            from spoolup.audio_library import AudioLibrary, PlaylistState
+            from spoolup.audio_server import AudioServer
+
+            data_dir = self.config.get("data_dir") or "data"
+            self.audio_library = AudioLibrary(data_dir)
+            self.playlist_state = PlaylistState(
+                os.path.join(data_dir, "audio_playlist.json")
+            )
+            if self.config.get("audio_server_enabled", True):
+                state = self.playlist_state.load()
+                volume = state.get("volume")
+                if volume is None:
+                    volume = float(
+                        self.config.get("audio_default_volume", 0.8) or 0.8
+                    )
+                self.standby_audio = AudioServer(volume=float(volume))
+        except Exception as e:
+            logger.error("Audio init failed (music disabled): %s", e)
+        try:
+            from spoolup.sessions import SessionStore
+
+            data_dir = self.config.get("data_dir") or "data"
+            self.session_store = SessionStore(
+                os.path.join(data_dir, "sessions.json")
+            )
+        except Exception as e:
+            logger.error("session store init failed: %s", e)
+        self._restore_audio_from_state()
+        if not self.config.get("dashboard_enabled", True):
+            return
+        try:
+            from spoolup.dashboard.app import create_app
+            import uvicorn
+
+            self.dashboard_ctx = build_dashboard_context(self)
+            self.dashboard_ctx.audio_library = self.audio_library
+            self.dashboard_ctx.playlist_state = self.playlist_state
+            self.dashboard_ctx.get_audio_server = self._current_audio_server
+            self.dashboard_ctx.sessions = self.session_store
+            self.dashboard_ctx.updater = self.updater
+            self.dashboard_ctx.get_update_status = self._get_update_status
+            handler = self.dashboard_ctx.log_handler
+            handler.setFormatter(logging.Formatter(
+                "%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+            logging.getLogger().addHandler(handler)
+
+            config = uvicorn.Config(
+                create_app(self.dashboard_ctx),
+                host=self.config.get("dashboard_host") or "127.0.0.1",
+                port=int(self.config.get("dashboard_port") or 8007),
+                log_level="warning",
+            )
+            server = uvicorn.Server(config)
+            self.dashboard_thread = threading.Thread(
+                target=server.run, daemon=True, name="spoolup-dashboard"
+            )
+            self.dashboard_thread.start()
+            logger.info(
+                "Dashboard available at http://%s:%d",
+                self.config.get("dashboard_host") or "127.0.0.1",
+                int(self.config.get("dashboard_port") or 8007),
+            )
+        except Exception as e:
+            logger.error("Dashboard failed to start (streaming continues): %s", e)
+
+    def _start_action_worker(self) -> None:
+        self._action_thread = threading.Thread(
+            target=self._action_worker_loop, daemon=True, name="spoolup-actions"
+        )
+        self._action_thread.start()
+
+    def _action_worker_loop(self) -> None:
+        ctx = self.dashboard_ctx
+        while True:
+            time.sleep(1.0)
+            if ctx is None:
+                continue
+            for req in ctx.drain_actions():
+                try:
+                    self._handle_dashboard_action(req)
+                except Exception as e:
+                    logger.error("Dashboard action %s failed: %s", req.kind, e)
+
+    def _handle_dashboard_action(self, req) -> None:
+        s = self.streamer
+        if req.kind == "audio_volume":
+            srv = self._current_audio_server()
+            if srv is not None:
+                v = float(req.payload.get("volume", 0.8))
+                srv.set_volume(v)
+                if self.playlist_state is not None:
+                    self.playlist_state.save({"volume": v})
+            return
+        if req.kind == "audio_source":
+            self._apply_audio_source(req.payload)
+            return
+        if req.kind == "stream_stop":
+            if s is not None and s.is_streaming:
+                s.stop_streaming()
+                logger.info("Dashboard: stream stopped")
+            self._maybe_restart_pending()
+            return
+        if req.kind == "stream_restart":
+            if s is not None and s.is_streaming:
+                if s._restart_ffmpeg_stream():
+                    logger.info("Dashboard: stream pipeline restarted")
+                else:
+                    logger.error("Dashboard: restart failed")
+            else:
+                logger.info("Dashboard: no live stream to restart")
+            return
+        if req.kind == "stream_start":
+            if s is None:
+                logger.warning("Dashboard: no streamer (enable_live_stream?)")
+                return
+            if s.is_streaming:
+                logger.info("Dashboard: stream already running")
+                return
+            stats = self.moonraker.get_print_stats() if self.moonraker else {}
+            ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            if s.create_live_stream(f"manual_{ts}.gcode", stats):
+                webcam_url = self.config.get("webcam_url")
+                if webcam_url and s.start_streaming(webcam_url):
+                    logger.info("Dashboard: manual stream at %s", s.get_watch_url())
+            else:
+                logger.error("Dashboard: manual stream creation failed")
+            return
+        if req.kind == "update_apply":
+            self._auto_update_once()
+            return
+        logger.warning("Dashboard: unsupported action kind %r", getattr(req, "kind", None))
+
+    # ------- audio bridge (dashboard music control) -------
+    def _current_audio_server(self):
+        if self.streamer is not None and self.streamer.audio_server is not None:
+            return self.streamer.audio_server
+        return self.standby_audio
+
+    def _adopt_standby_audio(self):
+        """StreamManager provider: steal the standby server for streaming."""
+        srv = self.standby_audio
+        self.standby_audio = None
+        return srv
+
+    def _reclaim_audio_server(self, srv) -> None:
+        """StreamManager on_kill hook: return the server to standby."""
+        if self.standby_audio is None:
+            self.standby_audio = srv
+        else:
+            srv.stop()
+
+    def _apply_audio_source(self, payload: Dict[str, Any]) -> None:
+        from spoolup.audio_server import (
+            SilenceSource, FileSource, PlaylistSource,
+        )
+        srv = self._current_audio_server()
+        if srv is None:
+            logger.warning("audio_source ignored: no audio server")
+            return
+        kind = payload.get("source", "silence")
+        if kind == "silence":
+            srv.set_source(SilenceSource())
+            if self.playlist_state is not None:
+                self.playlist_state.save({"source": "silence", "track": None})
+            return
+        if kind == "library":
+            if self.audio_library is None or self.playlist_state is None:
+                logger.warning("audio_source library ignored: no library")
+                return
+            state = self.playlist_state.load()
+            track_id = payload.get("track_id") or state.get("track")
+            if track_id:
+                path = self.audio_library.track_path(track_id)
+                if path:
+                    src = FileSource(path)
+                    if src.exhausted():
+                        logger.error(
+                            "Audio decode failed for track %s "
+                            "(ffmpeg/file broken)", track_id
+                        )
+                        src.close()
+                        if self.dashboard_ctx is not None:
+                            self.dashboard_ctx.banners.append(
+                                "Audio decode failed for the selected track "
+                                "— check ffmpeg and the file."
+                            )
+                        return
+                    srv.set_source(src)
+                    self.playlist_state.save({"source": "library", "track": track_id})
+                    return
+            paths = [self.audio_library.track_path(t) for t in state.get("order", [])]
+            paths = [p for p in paths if p]
+            if paths:
+                srv.set_source(PlaylistSource(paths, loop=state.get("loop", True)))
+                self.playlist_state.save({"source": "library"})
+            else:
+                srv.set_source(SilenceSource())
+            return
+        if kind == "spotify":
+            self._apply_spotify_source(srv, payload)
+            return
+        logger.warning("audio_source: unknown kind %r", kind)
+
+    def _apply_spotify_source(self, srv, payload: Dict[str, Any]) -> None:
+        from spoolup.audio_server import LibrespotSource
+
+        path = self.config.get("librespot_path") or ""
+        user = self.config.get("spotify_username") or ""
+        password = self.config.get("spotify_password") or ""
+        if not (path and user and password):
+            logger.error(
+                "Spotify source requested but librespot_path/username/password "
+                "are not configured"
+            )
+            if self.dashboard_ctx is not None:
+                self.dashboard_ctx.banners.append(
+                    "Spotify not configured — set librespot_path + credentials in Settings"
+                )
+            return
+        src = LibrespotSource(path, user, password)
+        if src.exhausted():
+            logger.error("librespot could not start; staying on silence")
+            if self.dashboard_ctx is not None:
+                self.dashboard_ctx.banners.append(
+                    "librespot failed to start — check librespot_path"
+                )
+            src.close()
+            return
+        srv.set_source(src)
+        if self.playlist_state is not None:
+            self.playlist_state.save({"source": "spotify"})
+        if self.dashboard_ctx is not None:
+            self.dashboard_ctx.banners.append(
+                "Spotify source active — select 'SpoolUp' as the playback "
+                "device in your Spotify app"
+            )
+
+    def _restore_audio_from_state(self) -> None:
+        """Restore the user's last music choice onto the standby server."""
+        if self.playlist_state is None or self.standby_audio is None:
+            return
+        state = self.playlist_state.load()
+        if state.get("source", "silence") == "silence":
+            return
+        self._apply_audio_source({
+            "source": state["source"],
+            "track_id": state.get("track"),
+        })
+
+    def _on_print_error_state(self) -> None:
+        if not self.config.get("keep_stream_on_error", True):
+            logger.warning("keep_stream_on_error=false — stopping stream on error state")
+            if self.streamer is not None and self.streamer.is_streaming:
+                self.streamer.stop_streaming()
+
+    def _register_watchdog_checks(self) -> None:
+        if self.watchdog is None:
+            return
+
+        def check_ffmpeg():
+            s = self.streamer
+            if s is None:
+                return None
+            # Flag-gated (set by _ffmpeg_monitor_loop on unexpected death);
+            # the monitor clears is_streaming first, so is_streaming cannot
+            # gate this check.
+            if getattr(s, "_ffmpeg_died_unexpectedly", False):
+                def heal_ffmpeg():
+                    s._ffmpeg_died_unexpectedly = False
+                    s._restart_ffmpeg_stream()
+                return (
+                    False,
+                    "ffmpeg died while streaming — restarting pipeline",
+                    heal_ffmpeg,
+                )
+            return None
+
+        def check_pump_freshness():
+            s = self.streamer
+            if s is None or not getattr(s, "is_streaming", False):
+                return None
+            pump = getattr(s, "frame_pump", None)
+            if pump is None:
+                return None
+            stats = getattr(pump, "last_stats", None)
+            if stats is None:
+                return None
+            if time.time() - stats.get("ts", 0.0) > 60:
+                return (
+                    False,
+                    "webcam frame pump stalled > 60s — restarting pipeline",
+                    lambda: s._restart_ffmpeg_stream(),
+                )
+            return None
+
+        def check_audio():
+            if not self.config.get("audio_server_enabled", True):
+                return None
+            srv = self._current_audio_server()
+            if srv is None:
+                return None
+            snap = srv.snapshot()
+            if not snap.get("listening"):
+                def heal_audio():
+                    if srv._thread is None or not srv._thread.is_alive():
+                        srv._stop.clear()
+                        srv.start()
+                return (False, "audio server not listening — restarting", heal_audio)
+            return None
+
+        def check_moonraker():
+            if self.moonraker is None:
+                return None
+            state = getattr(self.moonraker, "print_state", "unknown")
+            if state == "unknown" and not getattr(self.moonraker, "_initial_state_handled", True):
+                return None
+            ws = getattr(self.moonraker, "ws", None)
+            if ws is None:
+                return (
+                    False,
+                    "moonraker websocket disconnected — reconnect loop active",
+                    None,
+                )
+            return None
+
+        self.watchdog.register_check("ffmpeg", check_ffmpeg)
+        self.watchdog.register_check("frame_pump", check_pump_freshness)
+        self.watchdog.register_check("audio", check_audio)
+        self.watchdog.register_check("moonraker", check_moonraker)
+
     def run(self):
         logger.info("=" * 60)
         logger.info("SpoolUp starting...")
         logger.info("=" * 60)
 
+        # Dashboard must come up before credentials: in the true first-run
+        # case (no config file yet) the setup wizard is the only way in.
+        self._start_dashboard()
+        self._start_action_worker()
+
+        log_path = self.config.get("log_file") or ""
+        if log_path:
+            try:
+                from logging.handlers import RotatingFileHandler
+
+                parent = os.path.dirname(os.path.abspath(log_path))
+                os.makedirs(parent, exist_ok=True)
+                handler = RotatingFileHandler(
+                    log_path, maxBytes=5 * 1024 * 1024, backupCount=3,
+                )
+                handler.setFormatter(logging.Formatter(
+                    "%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+                logging.getLogger().addHandler(handler)
+                logger.info("File logging: %s", log_path)
+            except Exception as e:
+                logger.error("rotating log handler failed: %s", e)
+
+        try:
+            from spoolup.watchdog import Watchdog
+
+            self.watchdog = Watchdog(
+                interval=int(self.config.get("watchdog_interval", 30) or 30)
+            )
+            if self.dashboard_ctx is not None:
+                self.watchdog.banners = self.dashboard_ctx.banners  # shared list
+            self._register_watchdog_checks()
+            self.watchdog.start()
+            if self.streamer is not None and self.watchdog is not None:
+                self.streamer.on_ffmpeg_death = lambda: self.watchdog.add_banner(
+                    "watchdog: ffmpeg died unexpectedly — restart pending"
+                )
+        except Exception as e:
+            logger.error("watchdog init failed: %s", e)
+
         if not self.load_youtube_credentials():
-            logger.error("YouTube credentials not available. Exiting.")
-            logger.error("Please authenticate using spoolup-auth on your PC/Mac")
-            return 1
+            if os.path.exists(self.config.config_file):
+                logger.error("YouTube credentials not available. Exiting.")
+                logger.error("Please authenticate using spoolup-auth on your PC/Mac")
+                return 1
+            logger.warning(
+                "First-run: waiting for configuration via dashboard wizard"
+            )
 
         moonraker_url: str = self.config.get("moonraker_url") or "http://localhost:7125"
         self.moonraker = MoonrakerClient(moonraker_url)
+        self.moonraker.on_error_state = self._on_print_error_state
 
         original_on_start = self.moonraker.on_print_started
         original_on_complete = self.moonraker.on_print_completed
@@ -2125,11 +2863,18 @@ This timelapse was automatically generated using Moonraker Timelapse plugin and 
         self.moonraker.on_print_completed = on_complete
         self.moonraker.on_print_cancelled = on_cancel
 
+        first_run = not os.path.exists(self.config.config_file)
         if not self.moonraker.connect_websocket():
-            logger.error("Failed to connect to Moonraker. Exiting.")
-            return 1
-
-        logger.info("Connected to Moonraker. Monitoring for print events...")
+            if not first_run:
+                logger.error("Failed to connect to Moonraker. Exiting.")
+                return 1
+            logger.warning(
+                f"First-run: could not connect to Moonraker at {moonraker_url}. "
+                "Continuing so the dashboard wizard can fix moonraker_url; "
+                "the reconnection loop will keep retrying in the background."
+            )
+        else:
+            logger.info("Connected to Moonraker. Monitoring for print events...")
         logger.info("Press Ctrl+C to exit")
 
         # Wait for subscription to be confirmed (initial state will come via WebSocket)
@@ -2185,6 +2930,8 @@ This timelapse was automatically generated using Moonraker Timelapse plugin and 
                 self.moonraker.print_state = effective_state
 
         reconnect_thread = self.moonraker.start_reconnection_loop()
+
+        self._start_update_checker()
 
         try:
             while True:

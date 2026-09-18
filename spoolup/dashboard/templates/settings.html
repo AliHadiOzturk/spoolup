@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Settings</h1>
+<p class="badge">Restart the application to apply new configuration.</p>
+<div class="grid">
+  <form class="tb" id="cfgform" onsubmit="return saveConfig(event)">
+    {% for key, value in config.items() %}
+      {% if key == 'kick_stream_key' %}
+      <label class="sec">{{ key }}</label>
+      <input data-key="{{ key }}" value="***">
+      {% elif key in ('enable_live_stream', 'enable_timelapse_upload',
+                      'dashboard_enabled', 'kick_enabled', 'disable_ssl_verify',
+                      'auto_update_enabled') %}
+      <label>{{ key }}</label>
+      <select data-key="{{ key }}">
+        <option value="true" {% if value %}selected{% endif %}>true</option>
+        <option value="false" {% if not value %}selected{% endif %}>false</option>
+      </select>
+      {% else %}
+      <label>{{ key }}</label>
+      <input data-key="{{ key }}" value="{{ value }}"{% if key in int_keys %} data-int="1"{% endif %}>
+      {% endif %}
+    {% endfor %}
+  </form>
+</div>
+<div class="actions">
+  <button onclick="saveConfig()">Save</button>
+  <button onclick="probe('test-webcam')">Test webcam</button>
+  <button onclick="probe('test-moonraker')">Test Moonraker</button>
+</div>
+<div id="test-result"></div>
+<script>
+async function saveConfig(ev) {
+  if (ev) ev.preventDefault();
+  const values = {};
+  document.querySelectorAll("#cfgform [data-key]").forEach((el) => {
+    let v = el.value;
+    const asBool = {true: true, false: false}[v];
+    if (asBool !== undefined) v = asBool;
+    else if (el.dataset.int === "1") v = parseInt(v, 10);
+    values[el.dataset.key] = v;
+  });
+  const r = await fetch("/api/config", {
+    method: "PUT",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(values),
+  });
+  document.getElementById("test-result").textContent =
+      (await r.json()).ok ? "Saved." : "Invalid values.";
+  return false;
+}
+async function probe(kind) {
+  const key = kind === "test-webcam" ? "webcam_url" : "moonraker_url";
+  const url = document.querySelector("#cfgform [data-key='" + key + "']").value;
+  const r = await fetch("/api/config/" + kind, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({url: url}),
+  });
+  document.getElementById("test-result").textContent =
+      (await r.json()).ok ? "OK" : "FAILED";
+}
+</script>
+{% endblock %}

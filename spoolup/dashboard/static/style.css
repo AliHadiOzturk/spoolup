@@ -1,0 +1,14 @@
+body { font-family: system-ui, sans-serif; margin: 0; background: #121212; color: #eee; }
+nav { display: flex; gap: 18px; padding: 12px 20px; background: #1b1b1b; }
+nav a { color: #7fb8ff; text-decoration: none; }
+h1 { margin: 18px 20px 10px; }
+.grid { display: flex; flex-wrap: wrap; gap: 14px; padding: 0 20px; }
+.card { flex: 1 1 340px; background: #191919; border: 1px solid #2f2f2f; border-radius: 10px; padding: 14px 16px; white-space: pre-wrap; min-height: 170px; }
+.actions { display: flex; gap: 10px; padding: 14px 20px; }
+button { background: #2e6cff; color: #fff; border: 0; border-radius: 8px; padding: 10px 16px; cursor: pointer; }
+button:hover { filter: brightness(1.15); }
+pre#logbox { margin: 14px 20px; background: #0a0a0a; border: 1px solid #222; padding: 14px; max-height: 76vh; overflow: auto; font-size: 12px; }
+form.tb { display: grid; grid-template-columns: minmax(240px, 320px) 1fr; gap: 10px 14px; width: min(900px, 94%); padding: 0 20px 14px; }
+label.sec::after { content: " (secret)"; color: #ff7b7b; }
+input { background: #101010; color: #eee; border: 1px solid #333; border-radius: 6px; padding: 8px; }
+#test-result { padding: 10px 20px; color: #ffd27f; }

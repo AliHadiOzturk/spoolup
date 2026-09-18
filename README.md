@@ -207,6 +207,48 @@ spoolup/
 | `kick_rtmp_url` | Kick RTMP ingest URL (Kick Creator dashboard) | `rtmp://fa723fc1b91d4.global-media-services.com:1935/live` |
 | `kick_stream_key` | Kick stream key (keep secret; never commit) | `` |
 | `ingest_buffer_seconds` | Webcam-side frame buffer absorbing camera stalls | `10` |
+| `dashboard_enabled` | Run the embedded web dashboard alongside the runtime | `true` |
+| `dashboard_host` | Dashboard bind address (localhost only by default) | `127.0.0.1` |
+| `dashboard_port` | Dashboard port | `8007` |
+
+## 🖥️ Web Dashboard
+
+The runtime serves a local web dashboard (default `http://127.0.0.1:8007`):
+
+- **`/`** — live print/stream status cards (refreshed every 2s) and Start/Stop/Restart stream buttons
+- **`/settings`** — view and edit `config.json` (the Kick stream key is always masked and never clobbered by a save), with Test webcam / Test Moonraker connectivity probes
+- **`/logs`** — live tail of the runtime log
+
+If no `config.json` exists, the dashboard shows a first-time setup wizard instead: fill in the values, optionally upload the `youtube_token.json` produced by `spoolup_auth`, and click "Save and open dashboard". Everything is stored locally — no secrets are sent to any remote host.
+
+Disable it with `"dashboard_enabled": false` in `config.json`. If the dashboard fails to start, streaming continues unaffected (the failure is only logged).
+
+## 🎵 Music
+
+Open `/music`: upload tracks, build a playlist, pick Silence / Library / Spotify, set volume — all changes apply live without restarting the stream. Spotify requires `librespot` (Spotify Premium): set `librespot_path`, `spotify_username`, `spotify_password` in Settings, press Spotify, then select the "SpoolUp" device in your Spotify app.
+
+## 🛡️ 24/7 Operation
+
+SpoolUp is built to run unattended:
+
+- **Watchdog** — a 30-second sweep self-heals a dead ffmpeg (pipeline restart), a stalled webcam pump, a disconnected Moonraker socket, or a dead audio server; every repair shows as a banner on the dashboard.
+- **Standby loop** — after a print completes or is cancelled, everything returns to ready state; the next print starts a new stream automatically.
+- **Error policy** — `keep_stream_on_error: true` (default) keeps streaming through transient Klipper errors; set `false` to stop the stream the moment the print errors.
+- **Session history** — the dashboard shows the last 50 prints (filename, outcome, upload result) — proof the system kept working while you were away.
+- **Log rotation** — `log_file` (default `data/spoolup.log`) keeps max 5 MB × 3 archives.
+
+### Mainsail
+
+Set `mainsail_url` in Settings (e.g. `http://192.168.1.115:4408`) to embed your printer's Mainsail UI inside the dashboard's Printer tab.
+
+## 🔄 In-App Updates
+
+SpoolUp updates itself without the CLI:
+
+- **Auto-check** every 2h (`auto_update_interval_h`) — fetches the repo, installs changed dependencies, and shows the changelog on the dashboard.
+- **Live-safe** — the app never restarts mid-stream: an update found while streaming is *staged*, and the restart executes automatically the moment the stream ends.
+- **Manual** — dashboard buttons: "Check now" (changelog) and "Update now".
+- **Safe failure** — local changes or dependency errors are reported on the dashboard instead of breaking anything (ff-only merges only; no force operations).
 
 ## 🐛 Troubleshooting
 

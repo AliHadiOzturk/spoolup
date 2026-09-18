@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Logs</h1>
+<pre id="logbox">loading…</pre>
+<script>
+setInterval(async () => {
+  const r = await (await fetch("/api/logs?limit=200")).json();
+  document.getElementById("logbox").textContent = r.lines.join("\n");
+}, 2000);
+</script>
+{% endblock %}

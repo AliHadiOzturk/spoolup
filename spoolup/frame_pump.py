@@ -123,6 +123,8 @@ class FramePump:
         self._stats_frames_paced = 0
         self._stats_frames_starved = 0  # pacer ticks with nothing new (dup)
         self._stats_lock = threading.Lock()
+        # Last computed 10s stats snapshot (read by watchdog/dashboard)
+        self.last_stats: Optional[dict] = None
 
     def start(self) -> None:
         self._reader_thread = threading.Thread(
@@ -180,6 +182,14 @@ class FramePump:
                     paced - prev_out, (paced - prev_out) / 10.0,
                     len(self._buffer), stale / 10.0, starved / 10.0,
                 )
+                self.last_stats = {
+                    "read_rate": (read - prev_in) / 10.0,
+                    "paced_rate": (paced - prev_out) / 10.0,
+                    "buffer": len(self._buffer),
+                    "dup_rate": starved / 10.0,
+                    "stale_drop_rate": stale / 10.0,
+                    "ts": time.time(),
+                }
                 prev_in, prev_out = read, paced
 
         threading.Thread(target=stats_loop, daemon=True).start()
