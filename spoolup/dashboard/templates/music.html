@@ -1,4 +1,5 @@
 <h1>Music</h1>
+<div id="music-banners"></div>
 <div class="grid">
   <div class="card col-5">
     <div class="card-label">
@@ -13,6 +14,7 @@
       <button class="primary" id="src-library">Library</button>
       <button class="ghost" id="src-spotify">Spotify</button>
     </div>
+    <div id="spotify-panel" class="hint" style="margin-top:14px"></div>
   </div>
   <div class="card col-7">
     <div class="card-label">
@@ -23,7 +25,13 @@
     <div id="tracks" class="list" style="margin-top:12px">
       <div class="empty">No tracks yet — upload an mp3 to get started.</div>
     </div>
-    <p class="hint" style="margin-top:14px">Spotify: librespot only needs <code>librespot_path</code> in Settings. Press Spotify above, then select the “SpoolUp” device in your Spotify app — Spotify may ask to confirm this device; the login is cached in <code>data/spotify-cache</code> for later sessions.</p>
+    <p class="hint" style="margin-top:14px">
+      Spotify Connect feeds your live broadcast through <code>librespot</code>
+      (unofficial receiver — Spotify Premium required). Press Spotify, open the
+      Spotify app on the same network, pick the <strong>SpoolUp</strong> device,
+      then play. First connect may ask you to confirm the device; login is cached
+      in <code>data/spotify-cache</code>.
+    </p>
   </div>
 </div>
 <script src="/static/music.js"></script>

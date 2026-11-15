@@ -2688,18 +2688,35 @@ This timelapse was automatically generated using Moonraker Timelapse plugin and 
         logger.warning("audio_source: unknown kind %r", kind)
 
     def _apply_spotify_source(self, srv, payload: Dict[str, Any]) -> None:
-        from spoolup.audio_server import LibrespotSource
+        from spoolup.audio_server import (
+            LibrespotSource, SPOTIFY_DEVICE_NAME, resolve_librespot_path,
+        )
 
-        path = self.config.get("librespot_path") or ""
+        configured = self.config.get("librespot_path") or ""
+        path = resolve_librespot_path(configured)
         user = self.config.get("spotify_username") or ""
         password = self.config.get("spotify_password") or ""
         if not path:
-            logger.error("Spotify source requested but librespot_path is empty")
+            logger.error(
+                "Spotify source requested but librespot is not installed "
+                "(librespot_path=%r)", configured
+            )
             if self.dashboard_ctx is not None:
                 self.dashboard_ctx.add_banner(
-                    "Spotify not configured — set librespot_path in Settings"
+                    "Spotify needs librespot — install it, then set "
+                    "librespot_path in Settings (or leave blank if it is on PATH)"
                 )
             return
+        if configured and path != configured:
+            logger.info("Resolved librespot_path %r -> %s", configured, path)
+        elif not configured:
+            logger.info("Using librespot from PATH: %s", path)
+            # Persist the discovered path so Settings shows a concrete value.
+            try:
+                self.config.set_many({"librespot_path": path})
+                self.config.save()
+            except Exception as e:
+                logger.warning("Could not persist librespot_path: %s", e)
         data_dir = self.config.get("data_dir") or "data"
         cache_dir = os.path.join(data_dir, "spotify-cache")
         os.makedirs(cache_dir, exist_ok=True)
@@ -2707,12 +2724,19 @@ This timelapse was automatically generated using Moonraker Timelapse plugin and 
             path,
             username=user, password=password,
             cache_dir=cache_dir,
+            device_name=SPOTIFY_DEVICE_NAME,
         )
-        if src.exhausted():
-            logger.error("librespot failed to start (kept the current source)")
+        # Give librespot a moment to fail fast (bad binary / missing deps)
+        # before we commit it as the live source.
+        if not src.wait_until_ready(1.0) or src.exhausted():
+            detail = src.last_error() or "librespot exited immediately"
+            logger.error(
+                "librespot failed to start (kept the current source): %s",
+                detail,
+            )
             if self.dashboard_ctx is not None:
                 self.dashboard_ctx.add_banner(
-                    "librespot failed to start — check librespot_path"
+                    "librespot failed to start — %s" % detail
                 )
             src.close()
             return
@@ -2721,8 +2745,8 @@ This timelapse was automatically generated using Moonraker Timelapse plugin and 
             self.playlist_state.save({"source": "spotify"})
         if self.dashboard_ctx is not None:
             self.dashboard_ctx.add_banner(
-                "Spotify source active — select 'SpoolUp' as the playback "
-                "device in your Spotify app"
+                "Spotify Connect ready — open Spotify, pick device "
+                "'%s', then play (Premium required)" % SPOTIFY_DEVICE_NAME
             )
 
     def _restore_audio_from_state(self) -> None:
@@ -2786,20 +2810,36 @@ This timelapse was automatically generated using Moonraker Timelapse plugin and 
         def check_audio():
             if not self.config.get("audio_server_enabled", True):
                 return None
-            if not self._is_streaming_now():
-                return None
             srv = self._current_audio_server()
             if srv is None:
                 return None
-            if srv is None:
-                return None
             snap = srv.snapshot()
-            if not snap.get("listening"):
+            if self._is_streaming_now() and not snap.get("listening"):
                 def heal_audio():
                     if srv._thread is None or not srv._thread.is_alive():
                         srv._stop.clear()
                         srv.start()
                 return (False, "audio server not listening — restarting", heal_audio)
+            # Spotify/librespot (or any process source) died under us —
+            # fall back to silence so the live stream keeps a valid AAC track.
+            if (
+                snap.get("source") == "spotify"
+                and snap.get("source_alive") is False
+            ):
+                detail = snap.get("source_error") or "process exited"
+
+                def heal_spotify():
+                    from spoolup.audio_server import SilenceSource
+
+                    srv.set_source(SilenceSource())
+                    if self.playlist_state is not None:
+                        self.playlist_state.save({"source": "silence"})
+
+                return (
+                    False,
+                    "Spotify audio died (%s) — switched to silence" % detail,
+                    heal_spotify,
+                )
             return None
 
         def check_moonraker():

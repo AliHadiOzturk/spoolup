@@ -189,11 +189,34 @@ def create_app(ctx) -> FastAPI:
 
     @app.get("/api/audio/status")
     def api_audio_status():
+        from spoolup.audio_server import (
+            SPOTIFY_DEVICE_NAME, resolve_librespot_path,
+        )
+
         srv = ctx.get_audio_server()
+        cfg = ctx.config_values()
+        configured = cfg.get("librespot_path") or ""
+        resolved = resolve_librespot_path(configured)
         return {
-            "enabled": bool(ctx.config_values().get("audio_server_enabled", True)),
+            "enabled": bool(cfg.get("audio_server_enabled", True)),
             "snapshot": srv.snapshot() if srv else None,
             "playlist": ctx.playlist_state.load() if ctx.playlist_state else None,
+            "banners": list(ctx.banners),
+            "spotify": {
+                "ready": bool(resolved),
+                "device_name": SPOTIFY_DEVICE_NAME,
+                "librespot_path": resolved or "",
+                "configured_path": configured,
+                "premium_required": True,
+                "hint": (
+                    "Press Spotify, then in the Spotify app choose device "
+                    "'%s' and hit play. Spotify Premium is required."
+                    % SPOTIFY_DEVICE_NAME
+                    if resolved else
+                    "Install librespot (Spotify Premium), put it on PATH, "
+                    "or set librespot_path in Settings."
+                ),
+            },
         }
 
     @app.get("/api/music/tracks")

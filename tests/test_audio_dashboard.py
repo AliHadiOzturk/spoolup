@@ -64,6 +64,10 @@ def test_audio_status_endpoint():
     body = client.get("/api/audio/status").json()
     assert body["snapshot"]["source"] == "silence"
     assert body["snapshot"]["volume"] == 0.8
+    assert "spotify" in body
+    assert body["spotify"]["device_name"] == "SpoolUp"
+    assert "premium_required" in body["spotify"]
+    assert "hint" in body["spotify"]
 
 
 def test_music_upload_list_delete():

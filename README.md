@@ -225,7 +225,19 @@ Disable it with `"dashboard_enabled": false` in `config.json`. If the dashboard 
 
 ## 🎵 Music
 
-Open `/music`: upload tracks, build a playlist, pick Silence / Library / Spotify, set volume — all changes apply live without restarting the stream. Spotify requires `librespot` (Spotify Premium): set `librespot_path` in Settings, press Spotify, then select the "SpoolUp" device in your Spotify app. No username/password needed — modern Spotify accounts log in through the app (verification code / device confirmation), and the login is cached in `data/spotify-cache` for later sessions.
+Open `/music`: upload tracks, build a playlist, pick Silence / Library / Spotify, set volume — all changes apply live without restarting the stream.
+
+### Spotify (live broadcast audio)
+
+SpoolUp does **not** use the Spotify Web API for audio (that API cannot give you a playable stream to rebroadcast). Instead it runs [librespot](https://github.com/librespot-org/librespot) as a **Spotify Connect** receiver named `SpoolUp` and mixes that PCM into the live ffmpeg encode.
+
+1. Install librespot on the streaming machine (`cargo install librespot`, or your package manager). **Spotify Premium is required.**
+2. Put it on `PATH`, or set `librespot_path` in Settings to the binary (e.g. `/usr/local/bin/librespot`). If the path is blank and librespot is on PATH, SpoolUp auto-detects it the first time you press Spotify.
+3. Open `/music` → press **Spotify**. The Music page shows whether librespot was found and whether the receiver is running.
+4. On your phone/PC (same LAN), open the Spotify app → Devices → choose **SpoolUp** → play a track. Confirm the device if Spotify asks; credentials are cached in `data/spotify-cache`.
+5. Start or continue a print livestream — Spotify audio is already in the AAC track. Volume on `/music` controls the broadcast mix.
+
+If SpoolUp never appears in Spotify: check that the streaming machine is on the same network (mDNS/zeroconf must reach it — Docker usually needs host networking), that Premium is active, and that the Music page shows `receiver: running`.
 
 ## 🛡️ 24/7 Operation
 
