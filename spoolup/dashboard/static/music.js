@@ -1,5 +1,4 @@
 /* Music page: audio status + library rendering. */
-const AUDIO_API = "/api/";
 
 function el(tag, cls, text) {
   const n = document.createElement(tag);
@@ -17,6 +16,43 @@ function renderBanners(list) {
   });
 }
 
+function setActiveSourceButton(source) {
+  ["silence", "library", "spotify"].forEach((name) => {
+    const b = document.getElementById("src-" + name);
+    if (!b) return;
+    const on = source === name || (name === "library" && source && source.indexOf("file:") === 0);
+    b.classList.toggle("primary", on);
+    b.classList.toggle("ghost", !on);
+  });
+}
+
+function renderSpotifyCallout(spotify, snap, streaming) {
+  const box = document.getElementById("spotify-callout");
+  if (!box) return;
+  if (!spotify || !spotify.active) {
+    box.hidden = true;
+    box.textContent = "";
+    return;
+  }
+  box.hidden = false;
+  if (spotify.receiver_alive === false) {
+    box.textContent = "Spotify receiver died. " + (spotify.next_step || "");
+    return;
+  }
+  const device = spotify.device_name || "SpoolUp";
+  if (streaming) {
+    box.textContent =
+      "Spotify is active for the livestream. In the Spotify app → Devices → " +
+      device + " → play. You hear it on YouTube/Kick, not PC speakers.";
+  } else {
+    box.textContent =
+      "Spotify receiver is running as \"" + device + "\". Open Spotify on your " +
+      "phone/PC (same Wi‑Fi) → Devices → " + device + " → play. " +
+      "Nothing will play on this PC — audio only goes into the livestream " +
+      "once a broadcast is active.";
+  }
+}
+
 function renderSpotifyPanel(spotify, snap) {
   const panel = document.getElementById("spotify-panel");
   if (!panel) return;
@@ -26,10 +62,16 @@ function renderSpotifyPanel(spotify, snap) {
     return;
   }
   const title = el("div", null, spotify.ready
-    ? "Spotify ready (librespot found)"
+    ? (spotify.active
+        ? (spotify.receiver_alive === false
+            ? "Spotify selected — receiver dead"
+            : "Spotify selected — receiver running")
+        : "librespot found — press Spotify to start")
     : "Spotify not ready");
   title.style.fontWeight = "600";
-  title.style.color = spotify.ready ? "var(--ok)" : "var(--danger)";
+  title.style.color = (!spotify.ready || spotify.receiver_alive === false)
+    ? "var(--danger)"
+    : "var(--ok)";
   panel.appendChild(title);
 
   const lines = [];
@@ -37,14 +79,8 @@ function renderSpotifyPanel(spotify, snap) {
     lines.push("binary: " + spotify.librespot_path);
   }
   lines.push("device name: " + (spotify.device_name || "SpoolUp"));
-  if (snap && snap.source === "spotify") {
-    if (snap.source_alive === false) {
-      lines.push("receiver: dead — " + (snap.source_error || "exited"));
-    } else {
-      lines.push("receiver: running — pick SpoolUp in Spotify and play");
-    }
-  }
-  if (spotify.hint) lines.push(spotify.hint);
+  lines.push("PC speakers: no (broadcast mix only)");
+  if (spotify.next_step) lines.push("next: " + spotify.next_step);
   lines.forEach((t) => panel.appendChild(el("div", null, t)));
 }
 
@@ -52,6 +88,13 @@ async function setSource(source, extra) {
   const body = Object.assign({source: source}, extra || {});
   if (source === "spotify") {
     renderBanners(["Starting Spotify Connect receiver…"]);
+    const callout = document.getElementById("spotify-callout");
+    if (callout) {
+      callout.hidden = false;
+      callout.textContent =
+        "Starting receiver… then cast from the Spotify app to \"SpoolUp\". " +
+        "Audio is for the livestream only.";
+    }
   }
   const r = await fetch("/api/audio/source", {
     method: "POST",
@@ -63,8 +106,7 @@ async function setSource(source, extra) {
     renderBanners(["Could not queue audio change — try again in a second."]);
     return;
   }
-  // Action worker drains ~1s; poll so banners/status catch up after librespot starts.
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < 8; i++) {
     await new Promise((res) => setTimeout(res, 400));
     await refresh();
   }
@@ -74,8 +116,11 @@ async function refresh() {
   try {
     const status = await (await fetch("/api/audio/status")).json();
     const snap = status.snapshot || {};
+    const spotify = status.spotify || null;
     renderBanners(status.banners || []);
-    renderSpotifyPanel(status.spotify, snap);
+    renderSpotifyCallout(spotify, snap, !!status.streaming);
+    renderSpotifyPanel(spotify, snap);
+    setActiveSourceButton(snap.source || "silence");
 
     const np = document.getElementById("now-playing");
     np.classList.remove("skeleton");
@@ -95,20 +140,16 @@ async function refresh() {
     };
     build("source", snap.source || "off");
     build("volume", snap.volume !== undefined ? Math.round(snap.volume * 100) + "%" : "—");
-    build("connected", snap.client_connected ? "yes (in broadcast)" : "standby / not streaming");
+    build("livestream", status.streaming
+      ? (snap.client_connected ? "encoding (audio linked)" : "encoding")
+      : "not streaming — Spotify won't be audible yet");
     if (snap.source === "spotify") {
       build("spotify", snap.source_alive === false
         ? ("dead: " + (snap.source_error || "exited"))
-        : "waiting for Connect / playing");
+        : "receiver up — cast from Spotify app");
     }
     const vol = document.getElementById("volume");
     if (snap.volume !== undefined) vol.value = snap.volume;
-
-    const btnSpotify = document.getElementById("src-spotify");
-    if (btnSpotify && status.spotify) {
-      btnSpotify.title = status.spotify.hint || "";
-      btnSpotify.disabled = false;
-    }
 
     const tracks = await (await fetch("/api/music/tracks")).json();
     const box = document.getElementById("tracks");

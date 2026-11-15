@@ -68,6 +68,10 @@ def test_audio_status_endpoint():
     assert body["spotify"]["device_name"] == "SpoolUp"
     assert "premium_required" in body["spotify"]
     assert "hint" in body["spotify"]
+    assert "next_step" in body["spotify"]
+    assert body["spotify"]["plays_on_speakers"] is False
+    assert body["spotify"]["active"] is False
+    assert "streaming" in body
 
 
 def test_music_upload_list_delete():
