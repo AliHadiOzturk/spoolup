@@ -194,6 +194,22 @@ def test_probe_endpoints():
     assert mr.json() == {"ok": True}
 
 
+def test_app_restart_queues_action():
+    client, ctx, _, _ = make_client()
+    r = client.post("/api/app/restart")
+    assert r.json()["ok"] is True
+    reqs = ctx.drain_actions()
+    assert [q.kind for q in reqs] == ["app_restart"]
+
+
+def test_settings_page_has_restart_button():
+    client, _, _, _ = make_client()
+    html = client.get("/settings").text
+    assert 'id="btn-restart-app"' in html
+    assert "Restart application" in html
+    assert "restartApp()" in html
+
+
 def test_dashboard_thread_serves_http():
     # Empirical proof for C1: uvicorn.Server started via server.run in a
     # daemon thread actually answers HTTP (server.serve would not).
@@ -261,5 +277,7 @@ if __name__ == "__main__":
     test_dashboard_when_config_exists()
     test_wizard_token_upload_atomic()
     test_probe_endpoints()
+    test_app_restart_queues_action()
+    test_settings_page_has_restart_button()
     test_dashboard_thread_serves_http()
     print("test_dashboard_app: ALL PASS")

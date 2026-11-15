@@ -144,6 +144,16 @@ def create_app(ctx) -> FastAPI:
     def api_stream_restart():
         return {"ok": bool(ctx.submit(DashboardRequest(kind="stream_restart")))}
 
+    @app.post("/api/app/restart")
+    def api_app_restart():
+        """Restart the SpoolUp process so config (and updates) take effect.
+
+        Queued through the action worker so the HTTP response returns before
+        the process is replaced. If a livestream is active the runtime stages
+        the restart until the stream ends.
+        """
+        return {"ok": bool(ctx.submit(DashboardRequest(kind="app_restart")))}
+
     @app.get("/api/config")
     def api_config_get():
         return ctx.mask_config(ctx.config_values())
@@ -171,8 +181,8 @@ def create_app(ctx) -> FastAPI:
                     status_code=400)
         ok = ctx.save_config(incoming)
         if ok:
-            banner = ("Configuration saved — "
-                      "restart the application to apply.")
+            banner = ("Configuration saved — click Restart application "
+                      "to apply.")
             if banner not in ctx.banners:
                 ctx.add_banner(banner)
         return {"ok": ok}

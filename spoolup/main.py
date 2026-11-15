@@ -2114,7 +2114,7 @@ class SpoolUp:
         self.restart_app()
 
     def restart_app(self) -> None:
-        logger.warning("Restarting application to apply update...")
+        logger.warning("Restarting application...")
         if self.updater is not None:
             self.updater.set_state(pending_restart=False)
         self._pending_restart = False
@@ -2127,6 +2127,23 @@ class SpoolUp:
         except Exception as e:
             logger.error("stop before restart failed: %s", e)
         os.execv(sys.executable, argv)
+
+    def _request_app_restart(self, reason: str = "dashboard") -> None:
+        """Restart now, or stage until the livestream ends."""
+        if self._is_streaming_now():
+            self._pending_restart = True
+            if self.updater is not None:
+                self.updater.set_state(pending_restart=True)
+            self._banner(
+                "Restart staged — will restart when the stream ends (%s)"
+                % reason
+            )
+            logger.info(
+                "App restart deferred until stream ends (%s)", reason
+            )
+            return
+        self._banner("Restarting application…")
+        self.restart_app()
 
     def load_youtube_credentials(self) -> bool:
         """Load existing YouTube credentials from token file.
@@ -2613,6 +2630,9 @@ This timelapse was automatically generated using Moonraker Timelapse plugin and 
             return
         if req.kind == "update_apply":
             self._auto_update_once()
+            return
+        if req.kind == "app_restart":
+            self._request_app_restart(reason="settings")
             return
         logger.warning("Dashboard: unsupported action kind %r", getattr(req, "kind", None))
 

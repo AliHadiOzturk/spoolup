@@ -48,6 +48,29 @@ def test_stage_restart_defers_while_streaming():
     assert any("staged" in b for b in su.dashboard_ctx.banners)
 
 
+def test_request_app_restart_defers_while_streaming():
+    su = _make_spoolup(live=True)
+    state = {}
+    class U:
+        def set_state(self, **v): state.update(v)
+    su.updater = U()
+    calls = []
+    su.restart_app = lambda: calls.append(1)
+    su._request_app_restart(reason="settings")
+    assert calls == []
+    assert su._pending_restart is True
+    assert state["pending_restart"] is True
+    assert any("Restart staged" in b for b in su.dashboard_ctx.banners)
+
+
+def test_request_app_restart_runs_when_idle():
+    su = _make_spoolup(live=False)
+    calls = []
+    su.restart_app = lambda: calls.append(1)
+    su._request_app_restart(reason="settings")
+    assert calls == [1]
+
+
 def test_maybe_restart_executes_at_standby():
     su = _make_spoolup(live=False)
     su._pending_restart = True
@@ -113,12 +136,26 @@ def test_checker_disabled_still_creates_updater():
     assert su._update_checker_thread is None
 
 
+def test_app_restart_action_handler():
+    class Req:
+        kind = "app_restart"
+        payload = {}
+    su = _make_spoolup(live=False)
+    calls = []
+    su.restart_app = lambda: calls.append(1)
+    su._handle_dashboard_action(Req())
+    assert calls == [1]
+
+
 if __name__ == "__main__":
     test_is_streaming_now()
     test_stage_restart_defers_while_streaming()
+    test_request_app_restart_defers_while_streaming()
+    test_request_app_restart_runs_when_idle()
     test_maybe_restart_executes_at_standby()
     test_maybe_restart_skips_when_streaming()
     test_stage_restart_no_change_no_pending()
     test_stream_stop_fires_pending_restart()
+    test_app_restart_action_handler()
     test_checker_disabled_still_creates_updater()
     print("test_update_runtime: ALL PASS")
