@@ -20,7 +20,8 @@
     {% endfor %}
   </form>
 <div class="actions">
-  <button class="primary" onclick="saveConfig()">Save</button>
+  <button class="primary" id="btn-save" onclick="saveConfig()">Save</button>
+  <button class="primary" id="btn-restart-app" onclick="restartApp()" disabled title="Save config first, or restart anytime after a change">Restart application</button>
   <button class="ghost" onclick="probe('test-webcam')">Test webcam</button>
   <button class="ghost" onclick="probe('test-moonraker')">Test Moonraker</button>
 </div>
@@ -41,10 +42,67 @@ async function saveConfig(ev) {
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify(values),
   });
-  document.getElementById("test-result").textContent =
-      (await r.json()).ok ? "Saved." : "Invalid values.";
+  const body = await r.json();
+  const out = document.getElementById("test-result");
+  const restartBtn = document.getElementById("btn-restart-app");
+  if (body.ok) {
+    out.textContent = "Saved. Click Restart application to apply.";
+    restartBtn.disabled = false;
+    restartBtn.focus();
+  } else {
+    out.textContent = "Invalid values.";
+  }
   return false;
 }
+
+async function restartApp() {
+  const out = document.getElementById("test-result");
+  const btn = document.getElementById("btn-restart-app");
+  if (!window.confirm(
+      "Restart SpoolUp now?\n\n" +
+      "If a livestream is active, the restart is staged and runs when the stream ends."
+  )) {
+    return;
+  }
+  btn.disabled = true;
+  out.textContent = "Restarting…";
+  try {
+    const r = await fetch("/api/app/restart", {method: "POST"});
+    const body = await r.json();
+    if (!body.ok) {
+      out.textContent = "Could not queue restart — try again in a second.";
+      btn.disabled = false;
+      return;
+    }
+    out.textContent =
+        "Restart queued. If you are live, it waits until the stream ends; " +
+        "otherwise the page will reconnect shortly.";
+    // Poll until the dashboard comes back (process replaced via execv).
+    let tries = 0;
+    const poll = setInterval(async () => {
+      tries += 1;
+      try {
+        const s = await fetch("/api/status", {cache: "no-store"});
+        if (s.ok) {
+          clearInterval(poll);
+          out.textContent = "Application restarted.";
+          btn.disabled = false;
+        }
+      } catch (e) {
+        /* process still coming up */
+      }
+      if (tries > 60) {
+        clearInterval(poll);
+        out.textContent = "Restart was queued — refresh this page if it does not come back.";
+        btn.disabled = false;
+      }
+    }, 1000);
+  } catch (e) {
+    out.textContent = "Restart request failed — is SpoolUp still running?";
+    btn.disabled = false;
+  }
+}
+
 async function probe(kind) {
   const key = kind === "test-webcam" ? "webcam_url" : "moonraker_url";
   const url = document.querySelector("#cfgform [data-key='" + key + "']").value;
