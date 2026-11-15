@@ -252,11 +252,23 @@ class LibrespotSource(_ProcessSource):
     """
 
     @staticmethod
-    def build_cmd(librespot_path: str, username: str, password: str,
+    def build_cmd(librespot_path: str, username: str = "", password: str = "",
                   device_name: str = SPOTIFY_DEVICE_NAME, cache_dir: str = "",
                   argv_override=None):
+        """Build librespot argv for Spotify Connect (zeroconf) mode.
+
+        ``username`` / ``password`` are ignored: Spotify removed password
+        login, and modern librespot exits with an error if ``-p`` is passed.
+        Login happens when the user picks this device in the Spotify app;
+        credentials are cached under ``cache_dir``.
+        """
         if argv_override:
             return [librespot_path] + list(argv_override)
+        if password:
+            logger.warning(
+                "Ignoring spotify password — librespot password auth is gone; "
+                "using Spotify Connect"
+            )
         cmd = [
             librespot_path,
             "--name", device_name,
@@ -266,9 +278,6 @@ class LibrespotSource(_ProcessSource):
             "--initial-volume", "100",
             "--disable-audio-cache",
         ]
-        if username and password:
-            # Legacy password auth (removed by Spotify for modern accounts).
-            cmd += ["--username", username, "--password", password]
         if cache_dir:
             # Credentials land in system-cache; --cache alone is enough on
             # older builds, but both keep modern librespot happy.
@@ -279,12 +288,11 @@ class LibrespotSource(_ProcessSource):
                  username: str = "", password: str = "",
                  device_name: str = SPOTIFY_DEVICE_NAME,
                  cache_dir: str = "", argv_override=None):
-        """Modern Spotify accounts log in via the app's verification code,
-        so by default the source runs in ZEROCONF (Spotify Connect) mode:
-        no credentials are passed, the user selects the device in their
-        Spotify app, and the login is cached in ``cache_dir`` for later
-        sessions. If BOTH username and password are given (legacy librespot
-        builds that still support password auth), they are used instead."""
+        """Run librespot as a Spotify Connect receiver (zeroconf).
+
+        No username/password are passed — pick the ``device_name`` device in
+        the Spotify app; login is cached in ``cache_dir`` for later sessions.
+        """
         super().__init__()
         self._eof = False
         self.name = "spotify"

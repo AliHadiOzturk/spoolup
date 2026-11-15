@@ -149,18 +149,18 @@ def test_librespot_source_spawns_and_reads():
 
 def test_librespot_cmd_matches_mode():
     from spoolup.audio_server import LibrespotSource
-    # zeroconf (default): credentials NOT passed, cache + system-cache passed
+    # zeroconf only: credentials NEVER passed (password auth is dead)
     z = LibrespotSource.build_cmd("/usr/bin/librespot", "", "",
                                   cache_dir="/cache")
-    assert "--username" not in z
+    assert "--username" not in z and "--password" not in z
     assert "--cache" in z and "--system-cache" in z and "--name" in z
     assert "--backend" in z and "pipe" in z
     assert "--format" in z and "S16" in z
     assert "--initial-volume" in z
-    # legacy: both creds passed; cache still kept for credential reuse
+    # Even if legacy username/password are supplied, do not put them on argv
     l = LibrespotSource.build_cmd("/usr/bin/librespot", "u", "p",
                                   cache_dir="/cache")
-    assert "--username" in l and "--password" in l and "--cache" in l
+    assert "--username" not in l and "--password" not in l and "--cache" in l
 
 
 def test_resolve_librespot_path_uses_which(tmp_path=None):
