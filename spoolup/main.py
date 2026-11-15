@@ -2714,8 +2714,22 @@ This timelapse was automatically generated using Moonraker Timelapse plugin and 
 
         configured = self.config.get("librespot_path") or ""
         path = resolve_librespot_path(configured)
-        user = self.config.get("spotify_username") or ""
-        password = self.config.get("spotify_password") or ""
+        # Legacy config keys — Spotify removed password login; never pass them.
+        stale_password = bool(self.config.get("spotify_password"))
+        if stale_password or self.config.get("spotify_username"):
+            try:
+                self.config.set_many({
+                    "spotify_username": "",
+                    "spotify_password": "",
+                })
+                self.config.save()
+            except Exception as e:
+                logger.warning("Could not clear legacy Spotify credentials: %s", e)
+            if stale_password and self.dashboard_ctx is not None:
+                self.dashboard_ctx.add_banner(
+                    "Cleared spotify_password — Spotify no longer allows "
+                    "password login. Use Connect: pick SpoolUp in the Spotify app."
+                )
         if not path:
             logger.error(
                 "Spotify source requested but librespot is not installed "
@@ -2742,7 +2756,6 @@ This timelapse was automatically generated using Moonraker Timelapse plugin and 
         os.makedirs(cache_dir, exist_ok=True)
         src = LibrespotSource(
             path,
-            username=user, password=password,
             cache_dir=cache_dir,
             device_name=SPOTIFY_DEVICE_NAME,
         )

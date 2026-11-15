@@ -251,6 +251,7 @@ cargo install librespot
 4. In SpoolUp Settings set `librespot_path` to that full path, e.g.  
    `C:\Users\<you>\.cargo\bin\librespot.exe`  
    (or add `%USERPROFILE%\.cargo\bin` to your user PATH and leave `librespot_path` blank — SpoolUp auto-detects it).
+5. Leave `spotify_username` / `spotify_password` **empty**. Spotify removed password login; SpoolUp uses Spotify Connect only. If those fields still have old values, clear them (or click Spotify once — SpoolUp clears them automatically).
 
 On Linux/macOS: `cargo install librespot` (or your package manager), then point `librespot_path` at the binary (e.g. `/usr/local/bin/librespot`) or leave it blank if it is on PATH.
 

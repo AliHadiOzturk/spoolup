@@ -50,6 +50,9 @@ function renderSpotifyPanel(spotify, snap) {
 
 async function setSource(source, extra) {
   const body = Object.assign({source: source}, extra || {});
+  if (source === "spotify") {
+    renderBanners(["Starting Spotify Connect receiver…"]);
+  }
   const r = await fetch("/api/audio/source", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
@@ -58,9 +61,10 @@ async function setSource(source, extra) {
   const data = await r.json().catch(() => ({ok: false}));
   if (!data.ok) {
     renderBanners(["Could not queue audio change — try again in a second."]);
+    return;
   }
-  // Action worker drains ~1s; poll a few times so status catches up.
-  for (let i = 0; i < 4; i++) {
+  // Action worker drains ~1s; poll so banners/status catch up after librespot starts.
+  for (let i = 0; i < 6; i++) {
     await new Promise((res) => setTimeout(res, 400));
     await refresh();
   }
