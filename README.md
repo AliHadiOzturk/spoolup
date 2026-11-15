@@ -225,7 +225,42 @@ Disable it with `"dashboard_enabled": false` in `config.json`. If the dashboard 
 
 ## 🎵 Music
 
-Open `/music`: upload tracks, build a playlist, pick Silence / Library / Spotify, set volume — all changes apply live without restarting the stream. Spotify requires `librespot` (Spotify Premium): set `librespot_path` in Settings, press Spotify, then select the "SpoolUp" device in your Spotify app. No username/password needed — modern Spotify accounts log in through the app (verification code / device confirmation), and the login is cached in `data/spotify-cache` for later sessions.
+Open `/music`: upload tracks, build a playlist, pick Silence / Library / Spotify, set volume — all changes apply live without restarting the stream.
+
+### Spotify (live broadcast audio)
+
+SpoolUp does **not** use the Spotify Web API for audio (that API cannot give you a playable stream to rebroadcast). Instead it runs [librespot](https://github.com/librespot-org/librespot) as a **Spotify Connect** receiver named `SpoolUp` and mixes that PCM into the live ffmpeg encode. **Spotify Premium is required.**
+
+#### Install librespot on Windows (streaming PC)
+
+There is no official Windows installer — build it once with Rust:
+
+1. Install [Rust](https://www.rust-lang.org/tools/install) (`rustup-init.exe`). When prompted, install the **MSVC C++ build tools** / Visual Studio Build Tools + Windows SDK, then **open a new PowerShell**.
+2. Build and install librespot:
+
+```powershell
+cargo install librespot
+```
+
+3. Confirm it works:
+
+```powershell
+& "$env:USERPROFILE\.cargo\bin\librespot.exe" --version
+```
+
+4. In SpoolUp Settings set `librespot_path` to that full path, e.g.  
+   `C:\Users\<you>\.cargo\bin\librespot.exe`  
+   (or add `%USERPROFILE%\.cargo\bin` to your user PATH and leave `librespot_path` blank — SpoolUp auto-detects it).
+
+On Linux/macOS: `cargo install librespot` (or your package manager), then point `librespot_path` at the binary (e.g. `/usr/local/bin/librespot`) or leave it blank if it is on PATH.
+
+#### Use it while live
+
+1. Open `/music` → press **Spotify**. The page shows whether librespot was found and whether the receiver is running.
+2. On your phone/PC (same LAN), open the Spotify app → Devices → choose **SpoolUp** → play a track. Confirm the device if Spotify asks; credentials are cached in `data/spotify-cache`.
+3. Start or continue a print livestream — Spotify audio is already in the AAC track. Volume on `/music` controls the broadcast mix.
+
+If SpoolUp never appears in Spotify: check that the streaming PC is on the same network as your phone (Windows Firewall may need to allow `librespot.exe` / mDNS), that Premium is active, and that the Music page shows `receiver: running`.
 
 ## 🛡️ 24/7 Operation
 

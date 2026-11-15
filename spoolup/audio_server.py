@@ -9,6 +9,7 @@ unavailable, main.py falls back to the silent anullsrc input.
 
 import logging
 import os
+import shutil
 import socket
 import threading
 import time
@@ -22,10 +23,28 @@ BYTES_PER_SAMPLE = 2
 CHUNK_MS = 10
 CHUNK_BYTES = SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE * CHUNK_MS // 1000
 FADE_CHUNKS = 50  # 500 ms crossfade
+SPOTIFY_DEVICE_NAME = "SpoolUp"
 
 
 def silence_chunk(n: int = CHUNK_BYTES) -> bytes:
     return b"\x00" * n
+
+
+def resolve_librespot_path(configured: str = "") -> Optional[str]:
+    """Return an executable librespot path, or None if unavailable.
+
+    Accepts an absolute path, a bare command name on PATH, or falls back to
+    discovering ``librespot`` on PATH when ``configured`` is empty.
+    """
+    path = (configured or "").strip()
+    if path:
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+        found = shutil.which(path)
+        if found:
+            return found
+        return None
+    return shutil.which("librespot")
 
 
 def scale_pcm(data: bytes, volume: float) -> bytes:
@@ -73,6 +92,12 @@ class AudioSource:
     def close(self) -> None:
         pass
 
+    def alive(self) -> bool:
+        return True
+
+    def last_error(self) -> str:
+        return ""
+
 
 class SilenceSource(AudioSource):
     name = "silence"
@@ -89,19 +114,27 @@ class _ProcessSource(AudioSource):
     def __init__(self):
         self._proc = None
         self._thread = None
+        self._err_thread = None
         self._lock = threading.Lock()
         self._queue = []
         self._closed = False
         self._eof = False
+        self._stderr_lines = []  # type: List[str]
 
-    def _start(self, cmd):
+    def _start(self, cmd, capture_stderr=False):
         import subprocess
 
+        stderr = subprocess.PIPE if capture_stderr else subprocess.DEVNULL
         self._proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+            cmd, stdout=subprocess.PIPE, stderr=stderr
         )
         self._thread = threading.Thread(target=self._reader, daemon=True)
         self._thread.start()
+        if capture_stderr and self._proc.stderr is not None:
+            self._err_thread = threading.Thread(
+                target=self._stderr_reader, daemon=True
+            )
+            self._err_thread.start()
 
     def _reader(self):
         try:
@@ -113,12 +146,58 @@ class _ProcessSource(AudioSource):
                 if not data:
                     break
                 with self._lock:
+                    # Bound the queue so a fast producer cannot grow forever.
+                    if len(self._queue) > 200:
+                        self._queue.pop(0)
                     self._queue.append(data)
         finally:
             self._eof = True
 
+    def _stderr_reader(self):
+        try:
+            while not self._closed and self._proc and self._proc.stderr:
+                try:
+                    line = self._proc.stderr.readline()
+                except Exception:
+                    break
+                if not line:
+                    break
+                text = line.decode("utf-8", errors="replace").strip()
+                if not text:
+                    continue
+                with self._lock:
+                    self._stderr_lines.append(text)
+                    del self._stderr_lines[: max(0, len(self._stderr_lines) - 40)]
+                logger.debug("%s stderr: %s", self.name, text)
+        except Exception as e:
+            logger.debug("%s stderr reader stopped: %s", self.name, e)
+
     def exhausted(self) -> bool:
         return self._eof and not self._queue
+
+    def alive(self) -> bool:
+        if self._proc is None:
+            return False
+        return self._proc.poll() is None
+
+    def last_error(self) -> str:
+        with self._lock:
+            if not self._stderr_lines:
+                return ""
+            return self._stderr_lines[-1]
+
+    def wait_until_ready(self, timeout: float = 1.0) -> bool:
+        """Return True if the process is still alive after a short settle."""
+        deadline = time.time() + max(0.0, float(timeout))
+        while time.time() < deadline:
+            if not self.alive():
+                self._eof = True
+                return False
+            time.sleep(0.05)
+        if not self.alive():
+            self._eof = True
+            return False
+        return True
 
     def read_chunk(self, n_bytes: int) -> bytes:
         with self._lock:
@@ -174,7 +253,7 @@ class LibrespotSource(_ProcessSource):
 
     @staticmethod
     def build_cmd(librespot_path: str, username: str, password: str,
-                  device_name: str = "SpoolUp", cache_dir: str = "",
+                  device_name: str = SPOTIFY_DEVICE_NAME, cache_dir: str = "",
                   argv_override=None):
         if argv_override:
             return [librespot_path] + list(argv_override)
@@ -182,16 +261,23 @@ class LibrespotSource(_ProcessSource):
             librespot_path,
             "--name", device_name,
             "--backend", "pipe",
+            "--format", "S16",
+            "--bitrate", "160",
+            "--initial-volume", "100",
+            "--disable-audio-cache",
         ]
         if username and password:
+            # Legacy password auth (removed by Spotify for modern accounts).
             cmd += ["--username", username, "--password", password]
-        elif cache_dir:
-            cmd += ["--cache", cache_dir]
+        if cache_dir:
+            # Credentials land in system-cache; --cache alone is enough on
+            # older builds, but both keep modern librespot happy.
+            cmd += ["--cache", cache_dir, "--system-cache", cache_dir]
         return cmd
 
     def __init__(self, librespot_path: str,
                  username: str = "", password: str = "",
-                 device_name: str = "SpoolUp",
+                 device_name: str = SPOTIFY_DEVICE_NAME,
                  cache_dir: str = "", argv_override=None):
         """Modern Spotify accounts log in via the app's verification code,
         so by default the source runs in ZEROCONF (Spotify Connect) mode:
@@ -205,7 +291,7 @@ class LibrespotSource(_ProcessSource):
         cmd = self.build_cmd(librespot_path, username, password,
                              device_name, cache_dir, argv_override)
         try:
-            self._start(cmd)
+            self._start(cmd, capture_stderr=True)
         except FileNotFoundError:
             logger.error("librespot not found: %s", librespot_path)
             self._proc = None
@@ -216,6 +302,8 @@ class LibrespotSource(_ProcessSource):
             self._eof = True
 
     def exhausted(self) -> bool:
+        if not self.alive() and not self._queue:
+            self._eof = True
         return self._eof and not self._queue
 
 
@@ -335,9 +423,22 @@ class AudioServer:
 
     def snapshot(self) -> dict:
         with self._lock:
+            source = self._source
+            alive = True
+            err = ""
+            try:
+                alive = bool(source.alive())
+            except Exception:
+                alive = False
+            try:
+                err = source.last_error() or ""
+            except Exception:
+                err = ""
             return {
                 "port": self._port,
-                "source": self._source.name,
+                "source": source.name,
+                "source_alive": alive,
+                "source_error": err,
                 "volume": self._volume,
                 "listening": self._listener is not None,
                 "client_connected": self._conn is not None,
