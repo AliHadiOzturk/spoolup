@@ -24,6 +24,9 @@ CHUNK_MS = 10
 CHUNK_BYTES = SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE * CHUNK_MS // 1000
 FADE_CHUNKS = 50  # 500 ms crossfade
 SPOTIFY_DEVICE_NAME = "SpoolUp"
+# Fixed Connect/HTTP advertise port so Windows Firewall rules are predictable.
+# (mDNS itself still uses UDP 5353.)
+SPOTIFY_ZEROCONF_PORT = 24879
 
 
 def silence_chunk(n: int = CHUNK_BYTES) -> bytes:
@@ -168,7 +171,14 @@ class _ProcessSource(AudioSource):
                 with self._lock:
                     self._stderr_lines.append(text)
                     del self._stderr_lines[: max(0, len(self._stderr_lines) - 40)]
-                logger.debug("%s stderr: %s", self.name, text)
+                low = text.lower()
+                if any(k in low for k in (
+                    "error", "warn", "zeroconf", "discovery", "connect",
+                    "listening", "mdns", "country",
+                )):
+                    logger.info("%s: %s", self.name, text)
+                else:
+                    logger.debug("%s stderr: %s", self.name, text)
         except Exception as e:
             logger.debug("%s stderr reader stopped: %s", self.name, e)
 
@@ -254,7 +264,7 @@ class LibrespotSource(_ProcessSource):
     @staticmethod
     def build_cmd(librespot_path: str, username: str = "", password: str = "",
                   device_name: str = SPOTIFY_DEVICE_NAME, cache_dir: str = "",
-                  argv_override=None):
+                  argv_override=None, zeroconf_port: int = SPOTIFY_ZEROCONF_PORT):
         """Build librespot argv for Spotify Connect (zeroconf) mode.
 
         ``username`` / ``password`` are ignored: Spotify removed password
@@ -277,7 +287,14 @@ class LibrespotSource(_ProcessSource):
             "--bitrate", "160",
             "--initial-volume", "100",
             "--disable-audio-cache",
+            "--device-type", "speaker",
         ]
+        try:
+            port = int(zeroconf_port or 0)
+        except (TypeError, ValueError):
+            port = 0
+        if port > 1024:
+            cmd += ["--zeroconf-port", str(port)]
         if cache_dir:
             # Credentials land in system-cache; --cache alone is enough on
             # older builds, but both keep modern librespot happy.
@@ -287,7 +304,8 @@ class LibrespotSource(_ProcessSource):
     def __init__(self, librespot_path: str,
                  username: str = "", password: str = "",
                  device_name: str = SPOTIFY_DEVICE_NAME,
-                 cache_dir: str = "", argv_override=None):
+                 cache_dir: str = "", argv_override=None,
+                 zeroconf_port: int = SPOTIFY_ZEROCONF_PORT):
         """Run librespot as a Spotify Connect receiver (zeroconf).
 
         No username/password are passed — pick the ``device_name`` device in
@@ -296,8 +314,16 @@ class LibrespotSource(_ProcessSource):
         super().__init__()
         self._eof = False
         self.name = "spotify"
-        cmd = self.build_cmd(librespot_path, username, password,
-                             device_name, cache_dir, argv_override)
+        self.zeroconf_port = int(zeroconf_port or SPOTIFY_ZEROCONF_PORT)
+        cmd = self.build_cmd(
+            librespot_path, username, password,
+            device_name, cache_dir, argv_override,
+            zeroconf_port=self.zeroconf_port,
+        )
+        logger.info(
+            "Starting librespot Connect receiver %r (zeroconf port %d)",
+            device_name, self.zeroconf_port,
+        )
         try:
             self._start(cmd, capture_stderr=True)
         except FileNotFoundError:

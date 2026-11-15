@@ -102,6 +102,7 @@ class Config:
         "spotify_username": "",
         "spotify_password": "",
         "spotify_playlist_uri": "",
+        "spotify_zeroconf_port": 24879,
         "mainsail_url": "",
         "watchdog_interval": 30,
         "keep_stream_on_error": True,
@@ -2754,10 +2755,15 @@ This timelapse was automatically generated using Moonraker Timelapse plugin and 
         data_dir = self.config.get("data_dir") or "data"
         cache_dir = os.path.join(data_dir, "spotify-cache")
         os.makedirs(cache_dir, exist_ok=True)
+        try:
+            zc_port = int(self.config.get("spotify_zeroconf_port") or 24879)
+        except (TypeError, ValueError):
+            zc_port = 24879
         src = LibrespotSource(
             path,
             cache_dir=cache_dir,
             device_name=SPOTIFY_DEVICE_NAME,
+            zeroconf_port=zc_port,
         )
         # Give librespot a moment to fail fast (bad binary / missing deps)
         # before we commit it as the live source.
@@ -2778,10 +2784,11 @@ This timelapse was automatically generated using Moonraker Timelapse plugin and 
             self.playlist_state.save({"source": "spotify"})
         if self.dashboard_ctx is not None:
             self.dashboard_ctx.add_banner(
-                "Spotify receiver running as '%s'. Open the Spotify app "
-                "(same Wi‑Fi) → Devices → %s → play. Audio goes into the "
-                "livestream only — not your PC speakers."
-                % (SPOTIFY_DEVICE_NAME, SPOTIFY_DEVICE_NAME)
+                "Spotify receiver running as '%s' (Connect port %d). "
+                "If it does not appear in the Spotify app: same Wi‑Fi "
+                "(no VPN), allow librespot.exe in Windows Firewall, then "
+                "Devices → %s → play. Audio is livestream-only."
+                % (SPOTIFY_DEVICE_NAME, zc_port, SPOTIFY_DEVICE_NAME)
             )
 
     def _restore_audio_from_state(self) -> None:

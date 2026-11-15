@@ -157,6 +157,8 @@ def test_librespot_cmd_matches_mode():
     assert "--backend" in z and "pipe" in z
     assert "--format" in z and "S16" in z
     assert "--initial-volume" in z
+    assert "--zeroconf-port" in z and "24879" in z
+    assert "--device-type" in z
     # Even if legacy username/password are supplied, do not put them on argv
     l = LibrespotSource.build_cmd("/usr/bin/librespot", "u", "p",
                                   cache_dir="/cache")

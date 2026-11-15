@@ -17,7 +17,7 @@ _STATIC = os.path.join(os.path.dirname(__file__), "static")
 
 INT_KEYS = {"dashboard_port", "stream_fps", "watchdog_interval",
             "auto_update_interval_h", "ingest_buffer_seconds",
-            "retry_attempts"}
+            "retry_attempts", "spotify_zeroconf_port"}
 BOOL_KEYS = {"dashboard_enabled", "enable_live_stream",
              "enable_timelapse_upload", "disable_ssl_verify",
              "kick_enabled", "auto_update_enabled"}
@@ -38,8 +38,8 @@ KNOWN_KEYS = {
     "watchdog_interval", "auto_update_interval_h", "auto_update_enabled",
     "audio_server_enabled", "audio_default_volume", "data_dir",
     "librespot_path", "spotify_username", "spotify_password",
-    "spotify_playlist_uri", "mainsail_url", "keep_stream_on_error",
-    "log_file",
+    "spotify_playlist_uri", "spotify_zeroconf_port", "mainsail_url",
+    "keep_stream_on_error", "log_file",
 }
 
 
@@ -199,14 +199,19 @@ def create_app(ctx) -> FastAPI:
 
     @app.get("/api/audio/status")
     def api_audio_status():
+        import platform
         from spoolup.audio_server import (
-            SPOTIFY_DEVICE_NAME, resolve_librespot_path,
+            SPOTIFY_DEVICE_NAME, SPOTIFY_ZEROCONF_PORT, resolve_librespot_path,
         )
 
         srv = ctx.get_audio_server()
         cfg = ctx.config_values()
         configured = cfg.get("librespot_path") or ""
         resolved = resolve_librespot_path(configured)
+        try:
+            zc_port = int(cfg.get("spotify_zeroconf_port") or SPOTIFY_ZEROCONF_PORT)
+        except (TypeError, ValueError):
+            zc_port = SPOTIFY_ZEROCONF_PORT
         snap = srv.snapshot() if srv else None
         streaming = bool(
             getattr(getattr(ctx.runtime, "streamer", None), "is_streaming", False)
@@ -215,6 +220,22 @@ def create_app(ctx) -> FastAPI:
         receiver_alive = bool(
             spotify_active and snap.get("source_alive", True)
         )
+        os_name = platform.system().lower()
+        firewall_cmd = ""
+        if resolved and os_name.startswith("win"):
+            firewall_cmd = (
+                'netsh advfirewall firewall add rule name="SpoolUp librespot" '
+                'dir=in action=allow program="%s" enable=yes '
+                "profile=private,public"
+                % resolved
+            )
+        discovery_tips = [
+            "Phone/PC Spotify must be on the same Wi‑Fi as the streaming PC (no VPN/guest Wi‑Fi).",
+            "In Spotify: Devices (speaker icon) — look for '%s'." % SPOTIFY_DEVICE_NAME,
+            "Allow librespot through Windows Firewall (Private network).",
+            "Mesh/AP-isolation routers often hide Connect devices across nodes.",
+            "iPhone: Settings → Spotify → Local Network = On.",
+        ]
         if not resolved:
             next_step = (
                 "Install librespot (Spotify Premium), set librespot_path "
@@ -232,10 +253,10 @@ def create_app(ctx) -> FastAPI:
             )
         elif not streaming:
             next_step = (
-                "Receiver is running. Cast to '%s' in Spotify. "
-                "You will not hear it on PC speakers — start a livestream "
-                "to send audio to YouTube/Kick."
-                % SPOTIFY_DEVICE_NAME
+                "Receiver is running on Connect port %d. If Spotify does not "
+                "list '%s', run the firewall allow rule below, same Wi‑Fi, "
+                "then Devices → play. Audio is livestream-only."
+                % (zc_port, SPOTIFY_DEVICE_NAME)
             )
         else:
             next_step = (
@@ -255,6 +276,10 @@ def create_app(ctx) -> FastAPI:
                 "device_name": SPOTIFY_DEVICE_NAME,
                 "librespot_path": resolved or "",
                 "configured_path": configured,
+                "zeroconf_port": zc_port,
+                "os": os_name,
+                "firewall_cmd": firewall_cmd,
+                "discovery_tips": discovery_tips,
                 "premium_required": True,
                 "plays_on_speakers": False,
                 "next_step": next_step,

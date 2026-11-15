@@ -72,6 +72,9 @@ def test_audio_status_endpoint():
     assert body["spotify"]["plays_on_speakers"] is False
     assert body["spotify"]["active"] is False
     assert "streaming" in body
+    assert body["spotify"]["zeroconf_port"] == 24879
+    assert isinstance(body["spotify"]["discovery_tips"], list)
+    assert body["spotify"]["discovery_tips"]
 
 
 def test_music_upload_list_delete():
