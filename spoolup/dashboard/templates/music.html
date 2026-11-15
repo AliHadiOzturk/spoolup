@@ -1,5 +1,6 @@
 <h1>Music</h1>
 <div id="music-banners"></div>
+<div id="spotify-callout" class="banner" hidden></div>
 <div class="grid">
   <div class="card col-5">
     <div class="card-label">
@@ -7,11 +8,11 @@
       Now playing
     </div>
     <div id="now-playing" class="rows skeleton" aria-hidden="true">loading</div>
-    <label style="margin-top:16px">Volume</label>
+    <label style="margin-top:16px">Volume <span class="hint">(broadcast mix, not PC speakers)</span></label>
     <input type="range" id="volume" min="0" max="1.5" step="0.05" aria-label="Volume">
     <div class="actions">
       <button class="ghost" id="src-silence">Silence</button>
-      <button class="primary" id="src-library">Library</button>
+      <button class="ghost" id="src-library">Library</button>
       <button class="ghost" id="src-spotify">Spotify</button>
     </div>
     <div id="spotify-panel" class="hint" style="margin-top:14px"></div>
@@ -26,11 +27,12 @@
       <div class="empty">No tracks yet — upload an mp3 to get started.</div>
     </div>
     <p class="hint" style="margin-top:14px">
-      Spotify Connect feeds your live broadcast through <code>librespot</code>
-      (unofficial receiver — Spotify Premium required). Press Spotify, open the
-      Spotify app on the same network, pick the <strong>SpoolUp</strong> device,
-      then play. First connect may ask you to confirm the device; login is cached
-      in <code>data/spotify-cache</code>.
+      Spotify does <strong>not</strong> play through your PC speakers. SpoolUp
+      is a Connect receiver named <strong>SpoolUp</strong>: press Spotify, cast
+      from the Spotify app on the same Wi‑Fi, then start/keep a livestream —
+      the track is mixed into YouTube/Kick. Premium + librespot required.
+      Allow <code>librespot.exe</code> through Windows Firewall if the device
+      never appears.
     </p>
   </div>
 </div>

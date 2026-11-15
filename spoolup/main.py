@@ -2778,8 +2778,10 @@ This timelapse was automatically generated using Moonraker Timelapse plugin and 
             self.playlist_state.save({"source": "spotify"})
         if self.dashboard_ctx is not None:
             self.dashboard_ctx.add_banner(
-                "Spotify Connect ready — open Spotify, pick device "
-                "'%s', then play (Premium required)" % SPOTIFY_DEVICE_NAME
+                "Spotify receiver running as '%s'. Open the Spotify app "
+                "(same Wi‑Fi) → Devices → %s → play. Audio goes into the "
+                "livestream only — not your PC speakers."
+                % (SPOTIFY_DEVICE_NAME, SPOTIFY_DEVICE_NAME)
             )
 
     def _restore_audio_from_state(self) -> None:

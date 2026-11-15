@@ -207,25 +207,58 @@ def create_app(ctx) -> FastAPI:
         cfg = ctx.config_values()
         configured = cfg.get("librespot_path") or ""
         resolved = resolve_librespot_path(configured)
+        snap = srv.snapshot() if srv else None
+        streaming = bool(
+            getattr(getattr(ctx.runtime, "streamer", None), "is_streaming", False)
+        )
+        spotify_active = bool(snap and snap.get("source") == "spotify")
+        receiver_alive = bool(
+            spotify_active and snap.get("source_alive", True)
+        )
+        if not resolved:
+            next_step = (
+                "Install librespot (Spotify Premium), set librespot_path "
+                "in Settings, then press Spotify."
+            )
+        elif not spotify_active:
+            next_step = (
+                "Press Spotify here, then in the Spotify app choose device "
+                "'%s' and play." % SPOTIFY_DEVICE_NAME
+            )
+        elif not receiver_alive:
+            next_step = (
+                "librespot exited — check Logs, librespot_path, and Windows "
+                "Firewall for librespot.exe."
+            )
+        elif not streaming:
+            next_step = (
+                "Receiver is running. Cast to '%s' in Spotify. "
+                "You will not hear it on PC speakers — start a livestream "
+                "to send audio to YouTube/Kick."
+                % SPOTIFY_DEVICE_NAME
+            )
+        else:
+            next_step = (
+                "Cast to '%s' in Spotify — audio mixes into the live "
+                "broadcast now." % SPOTIFY_DEVICE_NAME
+            )
         return {
             "enabled": bool(cfg.get("audio_server_enabled", True)),
-            "snapshot": srv.snapshot() if srv else None,
+            "snapshot": snap,
+            "streaming": streaming,
             "playlist": ctx.playlist_state.load() if ctx.playlist_state else None,
             "banners": list(ctx.banners),
             "spotify": {
                 "ready": bool(resolved),
+                "active": spotify_active,
+                "receiver_alive": receiver_alive,
                 "device_name": SPOTIFY_DEVICE_NAME,
                 "librespot_path": resolved or "",
                 "configured_path": configured,
                 "premium_required": True,
-                "hint": (
-                    "Press Spotify, then in the Spotify app choose device "
-                    "'%s' and hit play. Spotify Premium is required."
-                    % SPOTIFY_DEVICE_NAME
-                    if resolved else
-                    "Install librespot (Spotify Premium), put it on PATH, "
-                    "or set librespot_path in Settings."
-                ),
+                "plays_on_speakers": False,
+                "next_step": next_step,
+                "hint": next_step,
             },
         }
 
