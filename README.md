@@ -261,7 +261,18 @@ On Linux/macOS: `cargo install librespot` (or your package manager), then point 
 2. On your phone/PC (same LAN), open the Spotify app → Devices → choose **SpoolUp** → play a track. Confirm the device if Spotify asks; credentials are cached in `data/spotify-cache`.
 3. Start or continue a print livestream — Spotify audio is already in the AAC track. Volume on `/music` controls the broadcast mix.
 
-If SpoolUp never appears in Spotify: check that the streaming PC is on the same network as your phone (Windows Firewall may need to allow `librespot.exe` / mDNS), that Premium is active, and that the Music page shows `receiver: running`.
+If SpoolUp never appears in Spotify Devices:
+
+1. Same Wi‑Fi as the streaming PC (no VPN / guest network / AP isolation).
+2. Music page shows Spotify receiver running.
+3. Allow librespot through Windows Firewall (**Admin PowerShell**):
+
+```powershell
+netsh advfirewall firewall add rule name="SpoolUp librespot" dir=in action=allow program="$env:USERPROFILE\.cargo\bin\librespot.exe" enable=yes profile=private,public
+```
+
+4. On iPhone: Settings → Spotify → **Local Network** = On.
+5. Prefer the Spotify app on your **phone** (same Wi‑Fi) over the desktop app on the streaming PC.
 
 ## 🛡️ 24/7 Operation
 

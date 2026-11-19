@@ -35,21 +35,45 @@ function renderSpotifyCallout(spotify, snap, streaming) {
     return;
   }
   box.hidden = false;
+  box.textContent = "";
   if (spotify.receiver_alive === false) {
-    box.textContent = "Spotify receiver died. " + (spotify.next_step || "");
+    box.appendChild(el("div", null,
+      "Spotify receiver died. " + (spotify.next_step || "")));
     return;
   }
   const device = spotify.device_name || "SpoolUp";
-  if (streaming) {
-    box.textContent =
-      "Spotify is active for the livestream. In the Spotify app → Devices → " +
-      device + " → play. You hear it on YouTube/Kick, not PC speakers.";
-  } else {
-    box.textContent =
-      "Spotify receiver is running as \"" + device + "\". Open Spotify on your " +
-      "phone/PC (same Wi‑Fi) → Devices → " + device + " → play. " +
-      "Nothing will play on this PC — audio only goes into the livestream " +
-      "once a broadcast is active.";
+  const port = spotify.zeroconf_port || 24879;
+  box.appendChild(el("div", null,
+    streaming
+      ? ("Spotify receiver is up as \"" + device + "\" (port " + port +
+         "). Cast from the Spotify app → Devices → " + device +
+         ". Audio goes to YouTube/Kick, not PC speakers.")
+      : ("Spotify receiver is up as \"" + device + "\" (port " + port +
+         "), but Spotify only finds it on the LAN. Same Wi‑Fi, no VPN, then " +
+         "Devices → " + device + ". No PC speaker playback — livestream only.")));
+
+  const tips = spotify.discovery_tips || [];
+  if (tips.length) {
+    const ul = document.createElement("ul");
+    ul.style.margin = "8px 0 0";
+    ul.style.paddingLeft = "18px";
+    tips.forEach((t) => {
+      const li = document.createElement("li");
+      li.textContent = t;
+      ul.appendChild(li);
+    });
+    box.appendChild(ul);
+  }
+  if (spotify.firewall_cmd) {
+    box.appendChild(el("div", null,
+      "Admin PowerShell (one time) to allow discovery:"));
+    const code = document.createElement("code");
+    code.style.display = "block";
+    code.style.marginTop = "6px";
+    code.style.whiteSpace = "pre-wrap";
+    code.style.wordBreak = "break-all";
+    code.textContent = spotify.firewall_cmd;
+    box.appendChild(code);
   }
 }
 
@@ -79,6 +103,9 @@ function renderSpotifyPanel(spotify, snap) {
     lines.push("binary: " + spotify.librespot_path);
   }
   lines.push("device name: " + (spotify.device_name || "SpoolUp"));
+  if (spotify.zeroconf_port) {
+    lines.push("Connect port: " + spotify.zeroconf_port);
+  }
   lines.push("PC speakers: no (broadcast mix only)");
   if (spotify.next_step) lines.push("next: " + spotify.next_step);
   lines.forEach((t) => panel.appendChild(el("div", null, t)));
