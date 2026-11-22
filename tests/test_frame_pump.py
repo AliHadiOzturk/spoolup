@@ -1,7 +1,7 @@
 import sys, os, time, collections, threading
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from spoolup.frame_pump import FramePump, parse_boundary
+from spoolup.frame_pump import FramePump, parse_boundary, write_all
 from tests.mjpeg_util import make_jpeg
 
 
@@ -63,8 +63,44 @@ def test_pacer_never_starves_after_drain():
         "underflow ticks repeat the LAST frame, never stall"
 
 
+def test_write_all_handles_partial_writes(monkeypatch=None):
+    """Simulate Windows-style short os.write counts; every byte must land."""
+    chunks = []
+    remaining = {"n": 3}  # write at most 3 bytes per call
+
+    def fake_write(fd, data):
+        n = min(remaining["n"], len(data))
+        chunks.append(bytes(data[:n]))
+        return n
+
+    real_write = os.write
+    os.write = fake_write  # type: ignore
+    try:
+        payload = b"ABCDEFGHIJ"
+        assert write_all(1, payload) is True
+        assert b"".join(chunks) == payload
+    finally:
+        os.write = real_write  # type: ignore
+
+
+def test_wait_for_buffer_reaches_target():
+    pump = _bare_pump(30, fps=10)
+    pump.webcam_url = "test://"
+
+    def filler():
+        for i in range(12):
+            time.sleep(0.02)
+            pump._push_frame(make_jpeg(i))
+
+    threading.Thread(target=filler, daemon=True).start()
+    assert pump.wait_for_buffer(min_frames=10, timeout=2.0) is True
+    assert pump.buffer_depth >= 10
+
+
 if __name__ == "__main__":
     test_parse_boundary_header_variants()
     test_buffer_drops_oldest_when_full()
     test_pacer_never_starves_after_drain()
+    test_write_all_handles_partial_writes()
+    test_wait_for_buffer_reaches_target()
     print("test_frame_pump: ALL PASS")

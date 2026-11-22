@@ -97,6 +97,27 @@ def parse_boundary(content_type: str) -> Optional[bytes]:
     return None
 
 
+def write_all(fd, data: bytes) -> bool:
+    """Write every byte of ``data`` to ``fd``.
+
+    ``os.write`` on Windows pipes (and under load on Unix) can return a
+    short count. A truncated JPEG corrupts the image2pipe demuxer and
+    freezes RTMP output as videoIngestionStarved. Loop until done.
+    """
+    if not data:
+        return True
+    view = memoryview(data)
+    while len(view) > 0:
+        try:
+            n = os.write(fd, view)
+        except (BrokenPipeError, OSError):
+            return False
+        if n <= 0:
+            return False
+        view = view[n:]
+    return True
+
+
 class FramePump:
     """Decouples a bursty MJPEG HTTP source from ffmpeg's stdin.
 
@@ -143,6 +164,37 @@ class FramePump:
             "FramePump: no frame within %.1fs from %s", timeout, self.webcam_url
         )
         return False
+
+    def wait_for_buffer(self, min_frames: int, timeout: float = 5.0) -> bool:
+        """Block until the ring holds ``min_frames`` (or timeout).
+
+        Warming the ring before the pacer starts means the first webcam
+        stall is absorbed by buffered frames instead of a long stretch of
+        last-frame duplicates hitting YouTube as low video output.
+        """
+        target = max(1, int(min_frames))
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            with self._lock:
+                depth = len(self._buffer)
+            if depth >= target:
+                logger.info(
+                    "FramePump: prebuffer ready (%d/%d frames)", depth, target
+                )
+                return True
+            self._stop.wait(0.05)
+        with self._lock:
+            depth = len(self._buffer)
+        logger.warning(
+            "FramePump: prebuffer only %d/%d frames after %.1fs; continuing",
+            depth, target, timeout,
+        )
+        return depth > 0
+
+    @property
+    def buffer_depth(self) -> int:
+        with self._lock:
+            return len(self._buffer)
 
     def serve(self, pipe_fd) -> None:
         self._pacer_thread = threading.Thread(
@@ -270,10 +322,19 @@ class FramePump:
                 self._stats_frames_paced += 1
                 if not fresh:
                     self._stats_frames_starved += 1
-            try:
-                os.write(pipe_fd, frame)
-            except (BrokenPipeError, OSError):
+            # write_all: never leave a truncated JPEG on the pipe.
+            write_started = time.time()
+            if not write_all(pipe_fd, frame):
+                logger.warning("FramePump: stdin write failed; stopping pacer")
                 break
+            write_took = time.time() - write_started
+            if write_took > self._interval * 2:
+                # FFmpeg stdin backpressure (usually RTMP/muxer stall). Log so
+                # health/restart paths can correlate with videoIngestionStarved.
+                logger.warning(
+                    "FramePump: slow stdin write %.0fms (target %.0fms/frame)",
+                    write_took * 1000.0, self._interval * 1000.0,
+                )
             next_tick += self._interval
             if next_tick < time.time() - 1.0:
                 next_tick = time.time()  # never burst-catch-up after lag
