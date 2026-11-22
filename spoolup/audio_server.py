@@ -110,9 +110,17 @@ class SilenceSource(AudioSource):
 
 
 class _ProcessSource(AudioSource):
-    """Base for sources backed by a subprocess writing s16le to stdout."""
+    """Base for sources backed by a subprocess writing s16le to stdout.
+
+    By default the reader applies *backpressure*: when the queue is full it
+    blocks instead of dropping. That keeps realtime producers (librespot)
+    playing at 1x. File/ffmpeg sources can opt into drop-oldest buffering.
+    """
 
     name = "process"
+    # ~100 ms of PCM. Small on purpose so librespot cannot race ahead.
+    _max_queue = 10
+    _drop_when_full = False
 
     def __init__(self):
         self._proc = None
@@ -123,6 +131,7 @@ class _ProcessSource(AudioSource):
         self._closed = False
         self._eof = False
         self._stderr_lines = []  # type: List[str]
+        self._have_pcm = False
 
     def _start(self, cmd, capture_stderr=False):
         import subprocess
@@ -148,11 +157,19 @@ class _ProcessSource(AudioSource):
                     break
                 if not data:
                     break
-                with self._lock:
-                    # Bound the queue so a fast producer cannot grow forever.
-                    if len(self._queue) > 200:
-                        self._queue.pop(0)
-                    self._queue.append(data)
+                if any(b != 0 for b in data):
+                    self._have_pcm = True
+                while not self._closed:
+                    with self._lock:
+                        if len(self._queue) < self._max_queue:
+                            self._queue.append(data)
+                            break
+                        if self._drop_when_full:
+                            self._queue.pop(0)
+                            self._queue.append(data)
+                            break
+                    # Backpressure: wait for AudioServer to consume.
+                    time.sleep(CHUNK_MS / 1000.0)
         finally:
             self._eof = True
 
@@ -235,6 +252,10 @@ class _ProcessSource(AudioSource):
 class FileSource(_ProcessSource):
     """Loops a single audio file through ffmpeg as s16le PCM."""
 
+    # ffmpeg can outrun the pacer; drop-oldest avoids unbounded RAM.
+    _max_queue = 200
+    _drop_when_full = True
+
     def __init__(self, path: str):
         super().__init__()
         self._eof = False
@@ -259,7 +280,16 @@ class LibrespotSource(_ProcessSource):
     AudioServer. ``argv_override`` is a test hook: when given, the spawn
     command is ``[librespot_path, *argv_override]`` instead of the real
     librespot arguments.
+
+    Important: the reader must *not* drain stdout faster than realtime.
+    Doing so makes librespot finish tracks almost instantly and Spotify
+    skips to the next song. Backpressure from ``_ProcessSource`` + a
+    always-on AudioServer pacer keeps playback at 1x.
     """
+
+    # Keep only ~100 ms buffered; block librespot when full.
+    _max_queue = 10
+    _drop_when_full = False
 
     @staticmethod
     def build_cmd(librespot_path: str, username: str = "", password: str = "",
@@ -387,7 +417,12 @@ class PlaylistSource(AudioSource):
 
 
 class AudioServer:
-    """Realtime PCM pacer over a localhost TCP listener."""
+    """Realtime PCM pacer over a localhost TCP listener.
+
+    Always drains the current source at realtime — even when ffmpeg is not
+    connected — so Spotify Connect (librespot pipe) keeps correct timing
+    instead of racing through tracks and skipping.
+    """
 
     def __init__(self, volume: float = 0.8):
         self._volume = max(0.0, min(1.5, float(volume)))
@@ -400,6 +435,8 @@ class AudioServer:
         self._fade_from: Optional[AudioSource] = None
         self._fade_left = 0
         self._lock = threading.Lock()
+        self._chunks_sent = 0
+        self._chunks_drained = 0
 
     # ---- lifecycle ----
     def start(self) -> int:
@@ -409,11 +446,11 @@ class AudioServer:
         lsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         lsock.bind(("127.0.0.1", 0))
         lsock.listen(1)
-        lsock.settimeout(30)
+        lsock.settimeout(0.0)  # non-blocking accept; pacer always runs
         self._listener = lsock
         self._port = lsock.getsockname()[1]
         self._thread = threading.Thread(
-            target=self._accept_and_pace, daemon=True
+            target=self._pace_loop, daemon=True
         )
         self._thread.start()
         logger.info("AudioServer listening on 127.0.0.1:%d", self._port)
@@ -460,6 +497,7 @@ class AudioServer:
             source = self._source
             alive = True
             err = ""
+            have_pcm = False
             try:
                 alive = bool(source.alive())
             except Exception:
@@ -468,65 +506,83 @@ class AudioServer:
                 err = source.last_error() or ""
             except Exception:
                 err = ""
+            try:
+                have_pcm = bool(getattr(source, "_have_pcm", False))
+            except Exception:
+                have_pcm = False
             return {
                 "port": self._port,
                 "source": source.name,
                 "source_alive": alive,
                 "source_error": err,
+                "receiving_pcm": have_pcm,
                 "volume": self._volume,
                 "listening": self._listener is not None,
                 "client_connected": self._conn is not None,
                 "fading": self._fade_left > 0,
+                "chunks_drained": self._chunks_drained,
+                "chunks_sent": self._chunks_sent,
             }
 
     # ---- internals ----
-    def _accept_and_pace(self):
+    def _try_accept(self) -> None:
+        if self._listener is None or self._conn is not None:
+            return
+        try:
+            conn, _ = self._listener.accept()
+            conn.settimeout(None)
+            self._conn = conn
+            logger.info("AudioServer: ffmpeg connected")
+        except BlockingIOError:
+            return
+        except socket.timeout:
+            return
+        except OSError as e:
+            if not self._stop.is_set():
+                logger.debug("AudioServer accept: %s", e)
+
+    def _next_chunk(self) -> bytes:
+        with self._lock:
+            cur = self._source
+            old = self._fade_from
+            fading = self._fade_left
+            volume = self._volume
+        chunk = cur.read_chunk(CHUNK_BYTES)
+        if old is not None and fading > 0:
+            t = 1.0 - (fading / float(FADE_CHUNKS))
+            chunk = mix_pcm(old.read_chunk(CHUNK_BYTES), chunk, t)
+            with self._lock:
+                self._fade_left -= 1
+                if self._fade_left <= 0:
+                    old.close()
+                    self._fade_from = None
+        return scale_pcm(chunk, volume)
+
+    def _pace_loop(self):
+        """Always drain the source at realtime; fan out to ffmpeg when present."""
         interval = CHUNK_MS / 1000.0
+        next_tick = time.time()
         while not self._stop.is_set():
-            try:
-                conn, _ = self._listener.accept()
-                conn.settimeout(None)
-                self._conn = conn
-                logger.info("AudioServer: ffmpeg connected")
-            except socket.timeout:
-                continue
-            except OSError as e:
+            self._try_accept()
+            wait = next_tick - time.time()
+            if wait > 0:
+                self._stop.wait(wait)
                 if self._stop.is_set():
                     break
-                logger.error("AudioServer accept failed: %s", e)
-                break
-            next_tick = time.time()
-            while not self._stop.is_set():
-                wait = next_tick - time.time()
-                if wait > 0:
-                    self._stop.wait(wait)
-                    if self._stop.is_set():
-                        break
-                with self._lock:
-                    cur = self._source
-                    old = self._fade_from
-                    fading = self._fade_left
-                chunk = cur.read_chunk(CHUNK_BYTES)
-                if old is not None and fading > 0:
-                    t = 1.0 - (fading / float(FADE_CHUNKS))
-                    chunk = mix_pcm(old.read_chunk(CHUNK_BYTES), chunk, t)
-                    with self._lock:
-                        self._fade_left -= 1
-                        if self._fade_left <= 0:
-                            old.close()
-                            self._fade_from = None
-                chunk = scale_pcm(chunk, self._volume)
+            chunk = self._next_chunk()
+            self._chunks_drained += 1
+            conn = self._conn
+            if conn is not None:
                 try:
                     conn.sendall(chunk)
+                    self._chunks_sent += 1
                 except OSError as e:
                     logger.error("AudioServer write failed: %s", e)
-                    break
-                next_tick += interval
-                if next_tick < time.time() - 1.0:
-                    next_tick = time.time()  # never burst-catch-up
-            try:
-                if self._conn is not None:
-                    self._conn.close()
-            except Exception:
-                pass
-            self._conn = None
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    self._conn = None
+            next_tick += interval
+            if next_tick < time.time() - 1.0:
+                next_tick = time.time()  # never burst-catch-up
