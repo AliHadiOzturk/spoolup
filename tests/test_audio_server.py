@@ -51,6 +51,8 @@ def _make_server():
     srv._fade_from = None
     srv._fade_left = 0
     srv._lock = _t.Lock()
+    srv._chunks_sent = 0
+    srv._chunks_drained = 0
     return srv
 
 
@@ -184,6 +186,43 @@ def test_snapshot_reports_source_alive():
     assert snap["source_alive"] is True
 
 
+def test_audio_server_drains_without_client():
+    """Spotify Connect needs realtime drain even before ffmpeg connects."""
+    srv = AudioServer(volume=1.0)
+    srv.start()
+    time.sleep(0.25)
+    snap = srv.snapshot()
+    srv.stop()
+    assert snap["listening"] is True
+    assert snap["client_connected"] is False
+    assert snap["chunks_drained"] >= 10, \
+        "pacer must drain source with no TCP client (got %s)" % snap["chunks_drained"]
+
+
+def test_librespot_reader_applies_backpressure():
+    """Queue must not grow unbounded — that caused Spotify to skip tracks."""
+    import tempfile, os as _os
+    script = _os.path.join(tempfile.mkdtemp(), "fast_pcm.py")
+    with open(script, "w") as f:
+        f.write(
+            "import sys\n"
+            "b=b'\\x01'*1764\n"
+            "while True:\n"
+            "    sys.stdout.buffer.write(b); sys.stdout.buffer.flush()\n"
+        )
+    from spoolup.audio_server import LibrespotSource
+    src = LibrespotSource(
+        librespot_path=sys.executable,
+        argv_override=[script],
+    )
+    time.sleep(0.3)
+    with src._lock:
+        qlen = len(src._queue)
+    src.close()
+    assert qlen <= src._max_queue + 1, \
+        "librespot reader must block when full, not drop (q=%d)" % qlen
+
+
 if __name__ == "__main__":
     test_scale_pcm_passthrough_and_clamp()
     test_mix_pcm_endpoints_and_middle()
@@ -194,4 +233,6 @@ if __name__ == "__main__":
     test_librespot_cmd_matches_mode()
     test_resolve_librespot_path_uses_which()
     test_snapshot_reports_source_alive()
+    test_audio_server_drains_without_client()
+    test_librespot_reader_applies_backpressure()
     print("test_audio_server: ALL PASS")

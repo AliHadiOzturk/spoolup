@@ -171,9 +171,13 @@ async function refresh() {
       ? (snap.client_connected ? "encoding (audio linked)" : "encoding")
       : "not streaming — Spotify won't be audible yet");
     if (snap.source === "spotify") {
-      build("spotify", snap.source_alive === false
-        ? ("dead: " + (snap.source_error || "exited"))
-        : "receiver up — cast from Spotify app");
+      let spotifyState = "receiver up — cast from Spotify app";
+      if (snap.source_alive === false) {
+        spotifyState = "dead: " + (snap.source_error || "exited");
+      } else if (snap.receiving_pcm) {
+        spotifyState = "receiving audio from Spotify";
+      }
+      build("spotify", spotifyState);
     }
     const vol = document.getElementById("volume");
     if (snap.volume !== undefined) vol.value = snap.volume;

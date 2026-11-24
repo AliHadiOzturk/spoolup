@@ -2556,6 +2556,9 @@ This timelapse was automatically generated using Moonraker Timelapse plugin and 
                         self.config.get("audio_default_volume", 0.8) or 0.8
                     )
                 self.standby_audio = AudioServer(volume=float(volume))
+                # Always pace (even with no ffmpeg yet) so Spotify Connect
+                # keeps realtime backpressure and does not skip tracks.
+                self.standby_audio.start()
         except Exception as e:
             logger.error("Audio init failed (music disabled): %s", e)
         try:
