@@ -820,16 +820,37 @@ class StreamManager:
 
         # Audio input: live PCM feed from AudioServer when available,
         # otherwise the legacy silent source (required by YouTube).
+        # thread_queue_size keeps a few seconds of PCM so a brief video
+        # stall does not force the muxer to block and freeze RTMP.
         if audio_port:
             audio_input = [
+                "-thread_queue_size", "512",
                 "-f", "s16le", "-ar", "44100", "-ac", "2",
                 "-i", "tcp://127.0.0.1:%d" % audio_port,
             ]
+            # Stretch/squeeze live audio onto the video timeline so an
+            # independent AudioServer clock cannot fill the muxer queue
+            # and stall video writes (YouTube videoIngestionStarved).
+            filter_complex = (
+                f"[0:v]fps={fps}:round=down,scale={resolution},format=yuv420p[v];"
+                f"[1:a]aresample=async=1:first_pts=0[a]"
+            )
+            map_args = ["-map", "[v]", "-map", "[a]"]
+            # AudioServer is infinite; do NOT use -shortest (a brief TCP
+            # blip would EOF audio and kill the whole encode). We kill
+            # ffmpeg ourselves on stop.
+            shortest_args: List[str] = []
         else:
             audio_input = [
                 "-f", "lavfi",
                 "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
             ]
+            filter_complex = (
+                f"[0:v]fps={fps}:round=down,scale={resolution},format=yuv420p[v]"
+            )
+            map_args = ["-map", "[v]", "-map", "1:a"]
+            # Stop when video ends (prevents infinite anullsrc)
+            shortest_args = ["-shortest"]
 
         # YouTube prefers 2-second GOP (Group of Pictures)
         gop_size = fps * 2
@@ -877,32 +898,31 @@ class StreamManager:
             # -framerate MUST match the pump's pacing (stream_fps): the raw
             # mjpeg demuxer assumes 25fps otherwise and the output timeline
             # drifts progressively behind realtime on long prints.
+            "-thread_queue_size", "64",
             "-f", "image2pipe",
             "-framerate", str(fps),
             "-c:v", "mjpeg",
             "-i", "pipe:0",
             # Audio input (live AudioServer feed, or silent anullsrc fallback)
             *audio_input,
-            # Video filter: enforce framerate, scale, ensure YUV420P for compatibility
-            "-filter_complex",
-            f"[0:v]fps={fps}:round=down,scale={resolution},format=yuv420p[v]",
-            "-map", "[v]",
-            "-map", "1:a",
-            # Muxer queue: prevent blocking when audio/video sync is temporarily off
-            "-max_muxing_queue_size", "1024",
+            # Video (+ optional async audio) filter graph
+            "-filter_complex", filter_complex,
+            *map_args,
+            # Muxer queue: absorb brief A/V skew without blocking stdin
+            "-max_muxing_queue_size", "2048",
             # Output CFR pacing: prevents the encoder from draining the input queue
             # faster than realtime (burst). Without this, the initial burst empties
             # the buffer before the webcam's deterministic ~9s stall at frame 308,
             # causing a complete output freeze (videoIngestionStarved).
             "-fps_mode", "cfr",
+            "-r", str(fps),
             # Video encoding options
             *video_opts,
             # Audio encoding
             "-c:a", "aac",
             "-b:a", "128k",
             "-ar", "44100",
-            # Stop when shortest input ends (prevents infinite anullsrc)
-            "-shortest",
+            *shortest_args,
             # Output format
             "-f", "tee",
             self._build_output_spec(),
@@ -921,6 +941,10 @@ class StreamManager:
         if not pump.wait_for_first_frame(timeout=10.0):
             pump.stop()
             return False
+        # Warm ~2s of frames so the first webcam stall is covered before
+        # RTMP starts. Cap wait so a slow camera still starts quickly.
+        warm_frames = min(fps * 2, max(1, fps * max(1, buffer_seconds) // 2))
+        pump.wait_for_buffer(min_frames=warm_frames, timeout=5.0)
 
         audio_port = None
         if self.config.get("audio_server_enabled", True):
@@ -976,12 +1000,12 @@ class StreamManager:
         self.ffmpeg_process = process
         self._start_ffmpeg_stderr_logger()
 
-        time.sleep(5)
-        if process.poll() is not None:
-            self._log_ffmpeg_start_failure(process.poll())
-            return self._retry_with_software_encoder(pump)
-
+        # CRITICAL: feed frames immediately. With live AudioServer PCM the
+        # old "sleep 5s then serve" left stdin dry while audio flowed, which
+        # skewed A/V and produced frozen YouTube/Kick (videoIngestionStarved).
         try:
+            if process.stdin is None:
+                raise RuntimeError("ffmpeg stdin is None")
             pump.serve(process.stdin.fileno())
         except Exception as e:
             logger.error(f"Could not start frame pacer: {e}")
@@ -990,6 +1014,16 @@ class StreamManager:
             self.frame_pump = None
             self.ffmpeg_process = None
             return False
+
+        # Brief settle so a hard encoder failure surfaces before we return.
+        # Frames are already flowing, so this no longer starves the muxer.
+        for _ in range(20):
+            if process.poll() is not None:
+                break
+            time.sleep(0.1)
+        if process.poll() is not None:
+            self._log_ffmpeg_start_failure(process.poll())
+            return self._retry_with_software_encoder(pump)
         return True
 
     def _log_ffmpeg_start_failure(self, exit_code: Optional[int]) -> None:
@@ -1587,9 +1621,13 @@ class StreamManager:
                     f"Stream issue detected: starvation={is_starvation}, inactive={is_inactive}, bad_health={is_bad_health} ({consecutive_issues} consecutive checks)"
                 )
 
-                if consecutive_issues >= 5:
+                # Starvation freezes the viewer feed; restart sooner (≈60s)
+                # than generic bad-health (≈90s). Old threshold was 150s.
+                restart_after = 2 if is_starvation else 3
+                if consecutive_issues >= restart_after:
                     logger.error(
-                        "Stream unhealthy for 150 seconds - attempting FFmpeg restart"
+                        "Stream unhealthy for ~%d seconds - attempting FFmpeg restart",
+                        consecutive_issues * 30,
                     )
                     self._restart_ffmpeg_stream()
                     consecutive_issues = 0
